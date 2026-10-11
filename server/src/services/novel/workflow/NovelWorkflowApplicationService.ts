@@ -385,6 +385,9 @@ export class NovelWorkflowApplicationService {
         cancelRequestedAt: new Date(),
         finishedAt: new Date(),
         heartbeatAt: new Date(),
+        // 取消是用户触发的终态化：等待恢复标记随终态一起清掉，
+        // 避免留下"既不可恢复、又持续报人工恢复待处理"的残留记录。
+        pendingManualRecovery: false,
       },
     });
   }

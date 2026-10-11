@@ -422,6 +422,7 @@ export default function TaskCenterPage() {
             loading={listQuery.isLoading}
             errorMessage={listErrorMessage}
             archived={isArchivedView}
+            hasMoreArchived={isArchivedView ? archivedListQuery.hasNextPage : false}
             onRetry={() => void listQuery.refetch()}
             onSelectTask={(task) => {
               setSearchParams((prev) => {

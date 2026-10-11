@@ -385,7 +385,7 @@ export class KnowledgeTaskAdapter {
     client: ArchiveDbClient = prisma,
   ): Promise<TaskArchiveScopeScan> {
     const scopeStatuses = getArchiveScopeStatuses(query.scope);
-    const archivedIds = await getArchivedTaskIds("knowledge_document");
+    const archivedIds = await getArchivedTaskIds("knowledge_document", client);
     const baseWhere = {
       ownerType: "knowledge_document" as const,
       status: { in: scopeStatuses },

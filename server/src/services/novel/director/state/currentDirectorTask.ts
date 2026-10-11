@@ -119,6 +119,8 @@ export async function startDirectorTaskForNovel(
             status: "cancelled",
             finishedAt: now,
             lastError: REPLACED_TASK_MESSAGE,
+            // 被新任务替代是用户触发的终态化：暂停等待恢复的旧任务一并清掉标记。
+            pendingManualRecovery: false,
           },
         });
         await tx.directorRunCommand.updateMany({

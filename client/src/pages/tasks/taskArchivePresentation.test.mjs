@@ -15,10 +15,13 @@ test("cleanup consequence says records are only hidden", () => {
   );
 });
 
-test("recoverable tasks show a disabled cleanup reason", () => {
-  assert.equal(
-    getCleanupState({ status: "failed", pendingManualRecovery: true, archive: null }).disabledReason,
-    "等待恢复的记录不能清理",
+test("paused recovery tasks allow per-record cleanup while active states stay disabled", () => {
+  assert.deepEqual(
+    getCleanupState({ status: "failed", pendingManualRecovery: true, archive: null }).mode,
+    "cleanup",
+  );
+  assert.ok(
+    getCleanupState({ status: "failed", pendingManualRecovery: true, archive: null }).hint,
   );
   assert.equal(
     getCleanupState({ status: "running", pendingManualRecovery: false, archive: null }).disabledReason,
@@ -49,7 +52,7 @@ test("scope options cover the three batch ranges", () => {
 });
 
 test("skip reasons translate into beginner-readable text", () => {
-  assert.equal(describeArchiveSkipReason("recovery_required"), "等待恢复的记录不能清理");
+  assert.equal(describeArchiveSkipReason("recovery_required"), "等待恢复的记录不支持批量清理，可在记录详情中逐条清理");
   assert.equal(describeArchiveSkipReason("active_task"), "任务尚未结束");
   assert.equal(describeArchiveSkipReason("not_found"), "记录不存在或已无法读取");
 });

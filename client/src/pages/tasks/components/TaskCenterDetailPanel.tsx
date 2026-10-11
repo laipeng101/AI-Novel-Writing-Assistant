@@ -112,7 +112,8 @@ export default function TaskCenterDetailPanel(props: TaskCenterDetailPanelProps)
             {getCleanupState(task).mode !== "hidden" ? (
               <TaskQueueActionRow
                 title={task.archive?.archivedAt ? "恢复这条记录的显示" : "整理这条记录"}
-                consequence="只会收起或恢复这条记录的显示，不会删除任务结果、正文或恢复位置。"
+                consequence={getCleanupState(task).hint
+                  ?? "只会收起或恢复这条记录的显示，不会删除任务结果、正文或恢复位置。"}
                 action={<TaskRecordActions task={task} />}
               />
             ) : null}

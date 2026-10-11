@@ -373,6 +373,8 @@ export class DirectorCommandLeaseService {
         cancelRequestedAt: now,
         finishedAt: now,
         error: CANCELLED_COMMAND_MESSAGE,
+        // 取消是用户触发的终态化：关联管线作业的等待恢复标记一并清掉。
+        pendingManualRecovery: false,
       },
     }).catch(() => null);
     const run = await prisma.directorRun.findUnique({

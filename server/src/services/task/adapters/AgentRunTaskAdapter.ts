@@ -236,7 +236,7 @@ export class AgentRunTaskAdapter {
     client: ArchiveDbClient = prisma,
   ): Promise<TaskArchiveScopeScan> {
     const scopeStatuses = getArchiveScopeStatuses(query.scope);
-    const archivedIds = await getArchivedTaskIds("agent_run");
+    const archivedIds = await getArchivedTaskIds("agent_run", client);
     const baseWhere = {
       status: { in: scopeStatuses },
       ...(archivedIds.length ? { id: { notIn: archivedIds } } : {}),

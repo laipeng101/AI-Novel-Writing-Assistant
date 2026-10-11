@@ -313,6 +313,8 @@ export async function cancelContinueExistingReplacedRuns(input: {
             cancelRequestedAt: now,
             heartbeatAt: now,
             finishedAt: now,
+            // 被新任务替代是用户触发的终态化：暂停等待恢复的作业一并清掉标记。
+            pendingManualRecovery: false,
           },
         });
       }

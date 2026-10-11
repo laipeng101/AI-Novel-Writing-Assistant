@@ -1,4 +1,5 @@
 import type { TaskKind } from "@ai-novel/shared/types/task";
+import type { ArchiveDbClient } from "./archive";
 import { prisma } from "../../db/prisma";
 
 export async function archiveTask(taskKind: TaskKind, taskId: string): Promise<void> {
@@ -34,8 +35,11 @@ export async function isTaskArchived(taskKind: TaskKind, taskId: string): Promis
   return Boolean(row);
 }
 
-export async function getArchivedTaskIds(taskKind: TaskKind): Promise<string[]> {
-  const rows = await prisma.taskCenterArchive.findMany({
+export async function getArchivedTaskIds(
+  taskKind: TaskKind,
+  client: ArchiveDbClient = prisma,
+): Promise<string[]> {
+  const rows = await client.taskCenterArchive.findMany({
     where: {
       taskKind,
     },

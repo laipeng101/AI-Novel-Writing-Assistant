@@ -256,25 +256,18 @@ export class StyleExtractionTaskAdapter {
     client: ArchiveDbClient = prisma,
   ): Promise<TaskArchiveScopeScan> {
     const scopeStatuses = getArchiveScopeStatuses(query.scope);
-    const archivedIds = await getArchivedTaskIds("style_extraction");
+    const archivedIds = await getArchivedTaskIds("style_extraction", client);
     const baseWhere = {
       status: { in: scopeStatuses },
       ...(archivedIds.length ? { id: { notIn: archivedIds } } : {}),
     };
-    const [candidateCount, blockedCount, alreadyArchivedCount, candidateRows, blockedRows] = await Promise.all([
-      client.styleExtractionTask.count({ where: { ...baseWhere, pendingManualRecovery: false } }),
-      client.styleExtractionTask.count({ where: { ...baseWhere, pendingManualRecovery: true } }),
+    const [candidateCount, alreadyArchivedCount, candidateRows] = await Promise.all([
+      client.styleExtractionTask.count({ where: baseWhere }),
       client.styleExtractionTask.count({
         where: { status: { in: scopeStatuses }, id: { in: archivedIds } },
       }),
       client.styleExtractionTask.findMany({
-        where: { ...baseWhere, pendingManualRecovery: false },
-        select: { id: true, name: true, status: true, createdStyleProfileName: true, updatedAt: true },
-        orderBy: [{ updatedAt: "asc" }, { id: "asc" }],
-        take: query.take,
-      }),
-      client.styleExtractionTask.findMany({
-        where: { ...baseWhere, pendingManualRecovery: true },
+        where: baseWhere,
         select: { id: true, name: true, status: true, createdStyleProfileName: true, updatedAt: true },
         orderBy: [{ updatedAt: "asc" }, { id: "asc" }],
         take: query.take,
@@ -290,8 +283,9 @@ export class StyleExtractionTaskAdapter {
     return {
       candidateCount,
       candidateSample: candidateRows.map(toRow),
-      blockedCount,
-      blockedSample: blockedRows.map(toRow),
+      // 范围内状态都是终态，终态行的等待恢复标记已无意义，不再产生 blocked 记录。
+      blockedCount: 0,
+      blockedSample: [],
       alreadyArchivedCount,
     };
   }

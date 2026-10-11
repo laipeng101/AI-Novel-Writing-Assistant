@@ -14,7 +14,7 @@
 
 - 实施前从最新 `beta` 创建独立功能分支，不在当前 `codex/fix-issue-159-migration-drift` 分支开发该跨模块功能。
 - 软删除只操作 `TaskCenterArchive`，不得修改业务任务状态、检查点、正文、产物、命令、通知或恢复资格。
-- `queued`、`running`、`waiting_approval`、人工恢复任务和恢复候选始终不可清理。
+- `queued`、`running`、`waiting_approval` 始终不可清理；人工恢复任务和恢复候选不进入批量清理范围，仅允许用户逐条明确选择后清理（清理后仍可从已清理恢复）。
 - 运行记录继续禁止重试、恢复任务、取消、审批、修复和重规划。
 - 不实现物理删除、自动过期、后台定时清理或“错误是否已解决”的自动判断。
 - 不新增数据库表；SQLite 与 PostgreSQL 沿用现有 `TaskCenterArchive`。
@@ -80,7 +80,7 @@
 ```markdown
 - “运行记录”不是工作流执行面；重试、恢复任务、继续、取消、重规划、修复和审批必须留在来源页面。
 - “运行记录”可以软删除和恢复历史记录；软删除只改变列表可见性，不得修改业务任务状态、检查点、正文、产物或恢复资格。
-- 活跃任务、等待审批、人工恢复任务和恢复候选不得软删除。
+- 活跃任务和等待审批任务不得软删除；人工恢复任务和恢复候选不进入批量清理范围，仅允许用户逐条明确选择后清理（清理后仍可从已清理恢复显示）。
 ```
 
 - [ ] **Step 2: Update the durable wiki boundary**
@@ -231,20 +231,26 @@ export interface TaskArchiveMetadata {
 
 - [ ] **Step 4: Implement the pure eligibility policy**
 
-`TaskArchivePolicy.evaluate()` 必须先应用安全拒绝，再应用范围：
+`TaskArchivePolicy.evaluate()` 必须先应用安全拒绝，再应用范围（终态判断先于标记检查：终态行的残留等待恢复标记已无意义，按普通终态放行）：
 
 ```ts
-if (task.status === "queued" || task.status === "running") return blocked("active_task");
 if (task.status === "waiting_approval") return blocked("waiting_approval");
-if (task.pendingManualRecovery || isRecoveryCandidate) return blocked("recovery_required");
-
-if (scope === "errors" && task.status !== "failed" && task.status !== "cancelled") {
-  return blocked("scope_mismatch");
+// 终态判断先于标记检查：终态行的残留等待恢复标记已无意义（恢复候选只取 queued/running），
+// 按普通终态放行，批量与 selected 一致。
+if (TERMINAL_STATUSES.has(task.status)) {
+  if (scope === "errors" && task.status !== "failed" && task.status !== "cancelled") {
+    return blocked("scope_mismatch");
+  }
+  if (scope === "completed" && task.status !== "succeeded") return blocked("scope_mismatch");
+  return allowed();
 }
-if (scope === "completed" && task.status !== "succeeded") return blocked("scope_mismatch");
-if (scope === "terminal" && !TERMINAL_STATUSES.has(task.status)) return blocked("scope_mismatch");
-if (scope === "selected" && !TERMINAL_STATUSES.has(task.status)) return blocked("scope_mismatch");
-return allowed();
+if (task.pendingManualRecovery || isRecoveryCandidate) {
+  // 仅非终态（queued/running）的等待恢复行会走到这里：
+  // 用户逐条明确选择（selected）视为同意收起，恢复路径由已清理视图保留；
+  // 批量范围仍拒绝，防止范围扫描误收起仍可恢复的任务。
+  return scope === "selected" ? allowed() : blocked("recovery_required");
+}
+return blocked("active_task");
 ```
 
 - [ ] **Step 5: Write failing service and route tests**
@@ -357,8 +363,9 @@ test("cleanup consequence says records are only hidden", () => {
   );
 });
 
-test("recoverable tasks show a disabled cleanup reason", () => {
-  assert.equal(getCleanupState(recoverableTask).disabledReason, "等待恢复的记录不能清理");
+test("paused recovery tasks allow per-record cleanup with a visible hint", () => {
+  assert.equal(getCleanupState(recoverableTask).mode, "cleanup");
+  assert.ok(getCleanupState(recoverableTask).hint);
 });
 ```
 
@@ -406,7 +413,7 @@ export function restoreTaskArchive(entry: TaskArchiveEntryRef) {
 
 - [ ] **Step 6: Add single-item cleanup and restore**
 
-详情面板仅在终态且非恢复候选时显示“清理这条”。已清理视图显示“恢复显示”。两者都只调用记录管理 API，不加入重试或恢复任务动作。
+详情面板对终态记录和等待恢复的记录显示“清理这条”（排队、运行中、等待审批除外），等待恢复记录附清理后果提示。已清理视图显示“恢复显示”。两者都只调用记录管理 API，不加入重试或恢复任务动作。
 
 - [ ] **Step 7: Invalidate all affected projections**
 

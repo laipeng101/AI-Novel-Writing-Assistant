@@ -58,7 +58,7 @@ export function describeArchiveSkipReason(reason: TaskArchiveSkipReason): string
     return "任务正在等待确认";
   }
   if (reason === "recovery_required") {
-    return "等待恢复的记录不能清理";
+    return "等待恢复的记录不支持批量清理，可在记录详情中逐条清理";
   }
   if (reason === "not_found") {
     return "记录不存在或已无法读取";
@@ -75,6 +75,8 @@ export function describeArchiveSkipReason(reason: TaskArchiveSkipReason): string
 export interface TaskCleanupState {
   mode: "cleanup" | "restore" | "hidden";
   disabledReason?: string;
+  /** 可清理但需要用户知道的后果提示（如等待恢复记录的清理影响）。 */
+  hint?: string;
 }
 
 export function getCleanupState(task: Pick<UnifiedTaskSummary, "status" | "pendingManualRecovery" | "archive">): TaskCleanupState {
@@ -82,7 +84,12 @@ export function getCleanupState(task: Pick<UnifiedTaskSummary, "status" | "pendi
     return { mode: task.archive.restoreAvailable ? "restore" : "hidden" };
   }
   if (task.pendingManualRecovery) {
-    return { mode: "cleanup", disabledReason: "等待恢复的记录不能清理" };
+    // 等待恢复的记录支持逐条清理：用户明确选择即视为放弃这次恢复提醒，
+    // 恢复路径保留（可随时在已清理中恢复显示）。
+    return {
+      mode: "cleanup",
+      hint: "已暂停等待恢复；清理后恢复提醒会一并收起，记录可随时在已清理中恢复显示。",
+    };
   }
   if (task.status === "waiting_approval") {
     return { mode: "cleanup", disabledReason: "等待确认的记录不能清理" };

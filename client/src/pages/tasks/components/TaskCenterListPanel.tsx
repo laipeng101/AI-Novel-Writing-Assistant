@@ -26,6 +26,8 @@ interface TaskCenterListPanelProps {
   loading: boolean;
   errorMessage?: string | null;
   archived?: boolean;
+  /** 已清理视图还有下一页游标时为真：本页 0 条也不代表没有可恢复的记录。 */
+  hasMoreArchived?: boolean;
   onRetry: () => void;
   onSelectTask: (task: UnifiedTaskSummary) => void;
 }
@@ -37,14 +39,18 @@ export default function TaskCenterListPanel({
   loading,
   errorMessage,
   archived = false,
+  hasMoreArchived = false,
   onRetry,
   onSelectTask,
 }: TaskCenterListPanelProps) {
+  const archivedPagePending = archived && hasMoreArchived && tasks.length === 0;
   return (
     <TaskQueueSection
       title={archived ? "已清理记录" : "任务记录"}
       description={archived
-        ? `${tasks.length} 条被收起的历史记录，任务结果和正文都还在，可以恢复显示。`
+        ? (archivedPagePending
+          ? "已收起的历史记录正在分批加载，任务结果和正文都还在。"
+          : `${tasks.length} 条被收起的历史记录，任务结果和正文都还在，可以恢复显示。`)
         : `${tasks.length} 项结果，优先展示需要处理和等待操作的任务。`}
       className="overflow-hidden rounded-2xl border-border/40 bg-card/60 shadow-[0_12px_36px_rgba(15,23,42,0.035)]"
     >
@@ -114,12 +120,19 @@ export default function TaskCenterListPanel({
           );
         })}
         {!loading && !errorMessage && tasks.length === 0 ? (
-          <TaskQueueEmptyState
-            title={archived ? "还没有已清理的记录" : "没有符合条件的任务"}
-            description={archived
-              ? "清理过的历史记录会出现在这里，随时可以恢复显示。"
-              : "可以清除筛选条件，或回到来源页面发起新的创作与资料处理任务。"}
-          />
+          archivedPagePending ? (
+            <TaskQueueEmptyState
+              title="还有已清理记录待加载"
+              description="点击下方“加载更多已清理记录”按钮，继续查看更早的记录。"
+            />
+          ) : (
+            <TaskQueueEmptyState
+              title={archived ? "还没有已清理的记录" : "没有符合条件的任务"}
+              description={archived
+                ? "清理过的历史记录会出现在这里，随时可以恢复显示。"
+                : "可以清除筛选条件，或回到来源页面发起新的创作与资料处理任务。"}
+            />
+          )
         ) : null}
       </div>
     </TaskQueueSection>

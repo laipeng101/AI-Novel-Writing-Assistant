@@ -17,6 +17,7 @@ import type {
 import { prisma } from "../../../db/prisma";
 import { resolveDatabaseRuntimeConfig } from "../../../config/database";
 import { AppError } from "../../../middleware/errorHandler";
+import { mapBookStatusToTaskStatus } from "../taskCenter.shared";
 import {
   evaluateTaskArchiveEligibility,
   getArchiveScopeStatuses,
@@ -80,6 +81,13 @@ interface ArchiveScanAccumulator {
   blockedCount: number;
   blockedRows: Array<TaskArchiveCandidateRow & { kind: TaskKind }>;
   alreadyArchivedCount: number;
+}
+
+/** selected 复读拿到的底层表原始行状态。 */
+interface SelectedEntryRawState {
+  status: TaskStatus;
+  pendingManualRecovery?: boolean | null;
+  lane?: string | null;
 }
 
 function toCandidateItem(
@@ -237,6 +245,93 @@ export class TaskArchiveService {
     return this.buildPreview(input, accumulator);
   }
 
+  /**
+   * selected 资格复读：按 kind 直查底层表的原始行（最小 select），用传入的 client 执行——
+   * 预览态是全局连接，执行态是归档事务，复读因此落在事务快照内。
+   *
+   * 与 scanner.detail 的合成状态判定等价（逐适配器核实过）：
+   * - novel_workflow 的 detail 会把"等待恢复 + queued/running"合成为 queued，两种读取得到相同结论；
+   *   开书租约中断是读取期合成（不落库，原始行保持 queued/running 且无标记），复读会按 active_task
+   *   拦截而 detail 按 failed 放行——这是有意保留的保守方向（宁可少收起），见 wiki 残留风险 2；
+   * - book_analysis 的 detail 会把 succeeded+空结果节合成为 failed，selected 范围下两种状态都放行；
+   *   draft/archived 与 detail 返回 null（not_found）对齐；
+   * - 其余类型的 detail 本就原样映射原始行。
+   * 导演来源的 auto_director 赛道隔离与这次查询合并，避免额外往返。
+   */
+  private async readSelectedEntryRawState(
+    kind: TaskKind,
+    id: string,
+    client: ArchiveDbClient,
+  ): Promise<SelectedEntryRawState | null> {
+    switch (kind) {
+      case "novel_workflow": {
+        const row = await client.novelWorkflowTask.findUnique({
+          where: { id },
+          select: { status: true, pendingManualRecovery: true, lane: true },
+        });
+        return row
+          ? { status: row.status as TaskStatus, pendingManualRecovery: row.pendingManualRecovery, lane: row.lane }
+          : null;
+      }
+      case "novel_pipeline": {
+        const row = await client.generationJob.findUnique({
+          where: { id },
+          select: { status: true, pendingManualRecovery: true },
+        });
+        return row
+          ? { status: row.status as TaskStatus, pendingManualRecovery: row.pendingManualRecovery }
+          : null;
+      }
+      case "book_analysis": {
+        const row = await client.bookAnalysis.findUnique({
+          where: { id },
+          select: { status: true, pendingManualRecovery: true },
+        });
+        if (!row) {
+          return null;
+        }
+        const status = mapBookStatusToTaskStatus(row.status);
+        return status
+          ? { status, pendingManualRecovery: row.pendingManualRecovery }
+          : null;
+      }
+      case "image_generation": {
+        const row = await client.imageGenerationTask.findUnique({
+          where: { id },
+          select: { status: true, pendingManualRecovery: true },
+        });
+        return row
+          ? { status: row.status as TaskStatus, pendingManualRecovery: row.pendingManualRecovery }
+          : null;
+      }
+      case "style_extraction": {
+        const row = await client.styleExtractionTask.findUnique({
+          where: { id },
+          select: { status: true, pendingManualRecovery: true },
+        });
+        return row
+          ? { status: row.status as TaskStatus, pendingManualRecovery: row.pendingManualRecovery }
+          : null;
+      }
+      case "agent_run": {
+        const row = await client.agentRun.findUnique({
+          where: { id },
+          select: { status: true },
+        });
+        return row ? { status: row.status as TaskStatus } : null;
+      }
+      case "knowledge_document": {
+        const row = await client.ragIndexJob.findFirst({
+          where: { id, ownerType: "knowledge_document" },
+          select: { status: true },
+        });
+        return row ? { status: row.status as TaskStatus } : null;
+      }
+      default:
+        return null;
+    }
+  }
+
   private async collectSelectedEntries(
     input: TaskArchiveRequest,
     client: ArchiveDbClient = prisma,
@@ -281,6 +376,28 @@ export class TaskArchiveService {
         skipped.push({ entry, reason: eligibility.reason });
         continue;
       }
+      // 事务内复读原始行：detail 读取（全局连接）与覆盖层写入之间存在竞态窗口，
+      // 这里用同一个 client 按原始状态重跑资格策略，状态已变化的条目按对应原因跳过；
+      // 导演来源的 auto_director 赛道隔离也在这次复读中落地。
+      const rawState = await this.readSelectedEntryRawState(entry.kind, entry.id, client);
+      if (!rawState) {
+        skipped.push({ entry, reason: "not_found" });
+        continue;
+      }
+      if (input.source === "director_follow_up"
+        && entry.kind === "novel_workflow"
+        && rawState.lane !== "auto_director") {
+        skipped.push({ entry, reason: "scope_mismatch" });
+        continue;
+      }
+      const rawEligibility = evaluateTaskArchiveEligibility(
+        { status: rawState.status, pendingManualRecovery: rawState.pendingManualRecovery },
+        input.scope,
+      );
+      if (!rawEligibility.eligible) {
+        skipped.push({ entry, reason: rawEligibility.reason });
+        continue;
+      }
       candidateRows.push({
         id: task.id,
         kind: entry.kind,
@@ -306,6 +423,7 @@ export class TaskArchiveService {
       // 在事务内重新收集并校验候选：预检之后任务可能已离开终态，
       // 不再符合条件的条目会以 skipped 返回，而不是被收起。
       const collected = await this.collectSelectedEntries(input, client);
+      // entries 已由路由 zod max(100) 封顶，此 slice 是服务层防御，正常请求不会触发截断。
       const candidateRows = collected.candidateRows.slice(0, MAX_ARCHIVE_BATCH_SIZE);
       const archivedRows: typeof candidateRows = [];
       let alreadyArchivedCount = 0;
@@ -487,7 +605,10 @@ export class TaskArchiveService {
       cursorPayload = lastConsumedMark;
     }
 
-    const nextCursor = items.length >= limit && lastConsumedMark && hasMoreMarks
+    // 扫描未穷尽（hasMoreMarks）且消费过标记就必须返回游标：孤儿标记块可能吃满单次
+    // 扫描预算（6 轮 × fetchSize），此时本页 items 可以少于 limit 甚至为 0，
+    // 丢弃游标会让后续有效记录永远不可达。标记穷尽才返回 null。
+    const nextCursor = lastConsumedMark && hasMoreMarks
       ? encodeArchiveCursor(lastConsumedMark)
       : null;
     return { items, nextCursor };

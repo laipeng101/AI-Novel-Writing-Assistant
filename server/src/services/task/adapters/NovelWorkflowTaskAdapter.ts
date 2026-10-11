@@ -599,37 +599,22 @@ export class NovelWorkflowTaskAdapter {
     client: ArchiveDbClient = prisma,
   ): Promise<TaskArchiveScopeScan> {
     const scopeStatuses = getArchiveScopeStatuses(query.scope);
-    const archivedIds = await getArchivedTaskIds("novel_workflow");
+    const archivedIds = await getArchivedTaskIds("novel_workflow", client);
     // 任务中心与导演跟进都只呈现 auto_director 赛道的导演任务，清理范围保持一致。
     const scopeWhere = {
       lane: "auto_director" as const,
       status: { in: scopeStatuses },
       ...(archivedIds.length ? { id: { notIn: archivedIds } } : {}),
     };
-    const [candidateCount, blockedCount, alreadyArchivedCount, candidateRows, blockedRows] = await Promise.all([
+    const [candidateCount, alreadyArchivedCount, candidateRows] = await Promise.all([
       client.novelWorkflowTask.count({
-        where: { ...scopeWhere, pendingManualRecovery: false },
-      }),
-      client.novelWorkflowTask.count({
-        where: { ...scopeWhere, pendingManualRecovery: true },
+        where: scopeWhere,
       }),
       client.novelWorkflowTask.count({
         where: { lane: "auto_director" as const, status: { in: scopeStatuses }, id: { in: archivedIds } },
       }),
       client.novelWorkflowTask.findMany({
-        where: { ...scopeWhere, pendingManualRecovery: false },
-        select: {
-          id: true,
-          title: true,
-          status: true,
-          updatedAt: true,
-          novel: { select: { title: true } },
-        },
-        orderBy: [{ updatedAt: "asc" }, { id: "asc" }],
-        take: query.take,
-      }),
-      client.novelWorkflowTask.findMany({
-        where: { ...scopeWhere, pendingManualRecovery: true },
+        where: scopeWhere,
         select: {
           id: true,
           title: true,
@@ -651,8 +636,9 @@ export class NovelWorkflowTaskAdapter {
     return {
       candidateCount,
       candidateSample: candidateRows.map(toRow),
-      blockedCount,
-      blockedSample: blockedRows.map(toRow),
+      // 范围内状态都是终态，终态行的等待恢复标记已无意义，不再产生 blocked 记录。
+      blockedCount: 0,
+      blockedSample: [],
       alreadyArchivedCount,
     };
   }

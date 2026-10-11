@@ -10,6 +10,7 @@ import { toast } from "@/components/ui/toast";
 import { invalidateTaskVisibilityCaches } from "@/lib/taskQueryCache";
 import { createIdempotencyKey } from "../taskCenterUtils";
 import {
+  buildArchiveResultSummary,
   buildCleanupConsequence,
   describeArchiveSkipReason,
   TASK_CLEANUP_SCOPE_OPTIONS,
@@ -57,14 +58,11 @@ export default function TaskArchiveDialog({
     onSuccess: async (response) => {
       const result = response.data;
       if (result) {
-        const parts = [`已收起 ${result.archivedCount} 条记录`];
-        if (result.skippedCount > 0) {
-          parts.push(`${result.skippedCount} 条保持原样`);
-        }
-        if (result.truncated) {
-          parts.push("仍有更多记录，可以再次清理");
-        }
-        toast.success(`${parts.join("，")}。`);
+        toast.success(buildArchiveResultSummary({
+          archivedCount: result.archivedCount,
+          skippedCount: result.skippedCount,
+          truncated: result.truncated,
+        }));
       }
       await invalidateTaskVisibilityCaches(queryClient);
       onOpenChange(false);
@@ -82,7 +80,7 @@ export default function TaskArchiveDialog({
     }}>
       <AppDialogContent
         title={`清理${scopeLabel}历史记录`}
-        description="选择要收起的记录范围，确认前会先显示数量。"
+        description="只会从列表中收起这些记录，不会删除任务结果或正文。"
         footer={(
           <div className="flex w-full flex-col gap-2 sm:flex-row sm:justify-end">
             <Button
@@ -150,7 +148,7 @@ export default function TaskArchiveDialog({
               <p>{buildCleanupConsequence(preview.candidateCount)}</p>
               {preview.skippedCount > 0 ? (
                 <p className="text-xs text-muted-foreground">
-                  另有 {preview.skippedCount} 条记录不适合清理
+                  另有 {preview.skippedCount} 条记录未收起
                   {preview.skipped.length > 0
                     ? `（例如：${describeArchiveSkipReason(preview.skipped[0].reason)}）`
                     : ""}。
@@ -164,10 +162,6 @@ export default function TaskArchiveDialog({
               ) : null}
             </div>
           ) : null}
-
-          <p className="rounded-lg bg-muted/40 px-3 py-2 text-xs leading-5 text-muted-foreground">
-            只会从列表中收起这些记录，不会删除任务结果或正文。
-          </p>
         </div>
       </AppDialogContent>
     </Dialog>

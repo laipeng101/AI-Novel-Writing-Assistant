@@ -544,6 +544,8 @@ export class NovelCorePipelineService {
           currentItemKey: null,
           currentItemLabel: null,
           finishedAt: new Date(),
+          // 取消是用户触发的终态化：暂停等待恢复的排队作业一并清掉标记。
+          pendingManualRecovery: false,
         },
       });
     }
@@ -554,6 +556,7 @@ export class NovelCorePipelineService {
         cancelRequestedAt: new Date(),
         heartbeatAt: new Date(),
         finishedAt: null,
+        pendingManualRecovery: false,
       },
     });
   }

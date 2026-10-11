@@ -11,7 +11,7 @@ function actionCodes(result) {
 
 test("follow-up resolver prefers manual recovery over other signals", () => {
   const result = resolveAutoDirectorFollowUpReason({
-    status: "failed",
+    status: "queued",
     checkpointType: "chapter_batch_ready",
     pendingManualRecovery: true,
   });
@@ -21,6 +21,25 @@ test("follow-up resolver prefers manual recovery over other signals", () => {
   assert.equal(result.priority, "P0");
   assert.deepEqual(actionCodes(result), ["continue_generic", "open_detail"]);
   assert.equal(result.supportsBatch, false);
+});
+
+test("follow-up resolver reports terminal reasons for residual recovery marks on finished tasks", () => {
+  // 终态行的等待恢复标记是历史残留：按真实终态给原因，不再报人工恢复待处理。
+  const failed = resolveAutoDirectorFollowUpReason({
+    status: "failed",
+    pendingManualRecovery: true,
+  });
+  assert.ok(failed);
+  assert.equal(failed.reason, "runtime_failed");
+  assert.deepEqual(actionCodes(failed), ["retry_with_task_model", "retry_with_route_model", "open_detail"]);
+
+  const cancelled = resolveAutoDirectorFollowUpReason({
+    status: "cancelled",
+    pendingManualRecovery: true,
+  });
+  assert.ok(cancelled);
+  assert.equal(cancelled.reason, "runtime_cancelled");
+  assert.deepEqual(actionCodes(cancelled), ["retry_with_task_model", "retry_with_route_model", "open_detail"]);
 });
 
 test("follow-up resolver returns candidate selection metadata", () => {

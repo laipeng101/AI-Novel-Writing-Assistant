@@ -105,6 +105,7 @@ test("errors scope preview counts only failed and cancelled terminal records", a
   await createWorkflowTask({ status: "cancelled", updatedAt: "2045-01-02T00:00:00.000Z" });
   await createWorkflowTask({ status: "succeeded", updatedAt: "2045-01-04T00:00:00.000Z" });
   await createWorkflowTask({ status: "running", updatedAt: "2045-01-05T00:00:00.000Z" });
+  // 终态+标记残留行按普通终态记录进入候选，不再因标记被拦截。
   await createWorkflowTask({
     status: "failed",
     pendingManualRecovery: true,
@@ -118,14 +119,10 @@ test("errors scope preview counts only failed and cancelled terminal records", a
     requestKey: "preview-errors",
   });
 
-  assert.equal(preview.candidateCount, 3);
-  assert.equal(preview.skippedCount, 1);
+  assert.equal(preview.candidateCount, 4);
+  assert.equal(preview.skippedCount, 0);
   assert.equal(preview.truncated, false);
   assert.equal(preview.maxBatchSize, 500);
-  assert.deepEqual(preview.skipped[0], {
-    entry: preview.skipped[0].entry,
-    reason: "recovery_required",
-  });
   // 候选按更新时间从旧到新排序，最旧的排前面。
   const updatedAtList = preview.candidates.map((item) => item.updatedAt);
   assert.deepEqual([...updatedAtList].sort(), updatedAtList);
@@ -176,9 +173,10 @@ test("execution rescan honors state changes that happen after preview", async (t
   assert.equal(await prisma.taskCenterArchive.count(), 0);
 });
 
-test("pendingManualRecovery records are never archived", async (t) => {
+test("paused recovery records are never archived by batch scopes", async (t) => {
   clearTables(t);
-  const task = await createWorkflowTask({ status: "failed", pendingManualRecovery: true });
+  // 等待恢复的任务原始状态是 queued/running，仍可从来源页恢复，批量范围不得收起。
+  const task = await createWorkflowTask({ status: "queued", pendingManualRecovery: true });
 
   const result = await service.archive({
     scope: "terminal",
@@ -186,7 +184,6 @@ test("pendingManualRecovery records are never archived", async (t) => {
     requestKey: "recovery-guard",
   });
   assert.equal(result.archivedCount, 0);
-  assert.equal(result.skippedCount, 1);
   assert.equal(await isTaskArchived("novel_workflow", task.id), false);
 });
 
@@ -462,4 +459,256 @@ test("archived workflow detail is reachable only with includeArchived", async (t
   const archivedDetail = await adapter.detail(task.id, { includeArchived: true });
   assert.ok(archivedDetail, "已清理详情通过 includeArchived 可见");
   assert.equal(archivedDetail?.id, task.id);
+});
+
+test("director follow-up source rejects selected manual_create lane entries", async (t) => {
+  clearTables(t);
+  const manual = await createWorkflowTask({ status: "failed", lane: "manual_create" });
+  const directorTask = await createWorkflowTask({ status: "failed", lane: "auto_director" });
+
+  const preview = await service.preview({
+    scope: "selected",
+    source: "director_follow_up",
+    requestKey: "director-lane-preview",
+    entries: [
+      { kind: "novel_workflow", id: manual.id },
+      { kind: "novel_workflow", id: directorTask.id },
+    ],
+  });
+  assert.equal(preview.candidateCount, 1);
+  const previewReasons = Object.fromEntries(preview.skipped.map((item) => [item.entry.id, item.reason]));
+  assert.equal(previewReasons[manual.id], "scope_mismatch");
+
+  const result = await service.archive({
+    scope: "selected",
+    source: "director_follow_up",
+    requestKey: "director-lane-execute",
+    entries: [
+      { kind: "novel_workflow", id: manual.id },
+      { kind: "novel_workflow", id: directorTask.id },
+    ],
+  });
+  assert.equal(result.archivedCount, 1);
+  const reasons = Object.fromEntries(result.skipped.map((item) => [item.entry.id, item.reason]));
+  assert.equal(reasons[manual.id], "scope_mismatch");
+  assert.equal(await isTaskArchived("novel_workflow", manual.id), false, "手动赛道任务不得被导演来源清理收起");
+  assert.equal(await isTaskArchived("novel_workflow", directorTask.id), true);
+});
+
+test("selected archive revalidates the raw row even when detail reports a stale terminal state", async (t) => {
+  clearTables(t);
+  const task = await createWorkflowTask({ status: "running" });
+  const realAdapter = new NovelWorkflowTaskAdapter();
+  // 模拟 detail 读到过期快照：详情谎报终态，真实行仍处于运行中。
+  const staleDetailService = new TaskArchiveService({
+    novel_workflow: {
+      scanArchiveScope: (...args) => realAdapter.scanArchiveScope(...args),
+      detail: async (id, options) => {
+        const detail = await realAdapter.detail(id, options);
+        return detail ? { ...detail, status: "failed", pendingManualRecovery: false } : null;
+      },
+    },
+  });
+
+  const result = await staleDetailService.archive({
+    scope: "selected",
+    source: "task_center",
+    requestKey: "stale-detail-execute",
+    entries: [{ kind: "novel_workflow", id: task.id }],
+  });
+  assert.equal(result.archivedCount, 0, "复读发现真实行未终态时必须跳过");
+  assert.equal(result.skippedCount, 1);
+  assert.equal(result.skipped[0].reason, "active_task");
+  assert.equal(await isTaskArchived("novel_workflow", task.id), false);
+
+  const consistent = await createWorkflowTask({ status: "failed" });
+  const okResult = await staleDetailService.archive({
+    scope: "selected",
+    source: "task_center",
+    requestKey: "stale-detail-consistent",
+    entries: [{ kind: "novel_workflow", id: consistent.id }],
+  });
+  assert.equal(okResult.archivedCount, 1, "复读与 detail 一致时正常归档");
+  assert.equal(await isTaskArchived("novel_workflow", consistent.id), true);
+});
+
+test("selected scope allows cleaning paused recovery tasks while batch scopes still reject them", async (t) => {
+  clearTables(t);
+  const pausedQueued = await createWorkflowTask({
+    status: "queued",
+    pendingManualRecovery: true,
+    lane: "auto_director",
+  });
+  const pausedFailed = await createWorkflowTask({
+    status: "failed",
+    pendingManualRecovery: true,
+    lane: "auto_director",
+  });
+
+  const preview = await service.preview({
+    scope: "selected",
+    source: "task_center",
+    requestKey: "recovery-selected-preview",
+    entries: [
+      { kind: "novel_workflow", id: pausedQueued.id },
+      { kind: "novel_workflow", id: pausedFailed.id },
+    ],
+  });
+  assert.equal(preview.candidateCount, 2, "等待恢复的记录支持逐条清理");
+
+  const result = await service.archive({
+    scope: "selected",
+    source: "task_center",
+    requestKey: "recovery-selected-execute",
+    entries: [
+      { kind: "novel_workflow", id: pausedQueued.id },
+      { kind: "novel_workflow", id: pausedFailed.id },
+    ],
+  });
+  assert.equal(result.archivedCount, 2);
+  assert.equal(await isTaskArchived("novel_workflow", pausedQueued.id), true);
+  assert.equal(await isTaskArchived("novel_workflow", pausedFailed.id), true);
+
+  // 批量范围仍拦截等待恢复的记录（queued/running 原始状态不进入终态范围扫描，
+  // 策略层继续报 recovery_required，见 taskArchivePolicy.test.js）。
+  const pausedStillBlocked = await createWorkflowTask({
+    status: "queued",
+    pendingManualRecovery: true,
+    lane: "auto_director",
+  });
+  const batch = await service.archive({
+    scope: "terminal",
+    source: "task_center",
+    requestKey: "recovery-batch-still-blocked",
+  });
+  assert.equal(batch.archivedCount, 0);
+  assert.equal(await isTaskArchived("novel_workflow", pausedStillBlocked.id), false);
+});
+
+test("terminal records with residual recovery marks are cleanable via selected and errors batch", async (t) => {
+  clearTables(t);
+  // 用户在来源页取消暂停任务的历史残留：状态已取消但标记未清。
+  const zombieSelected = await createWorkflowTask({
+    status: "cancelled",
+    pendingManualRecovery: true,
+    lane: "auto_director",
+  });
+  const selected = await service.archive({
+    scope: "selected",
+    source: "task_center",
+    requestKey: "zombie-selected",
+    entries: [{ kind: "novel_workflow", id: zombieSelected.id }],
+  });
+  assert.equal(selected.archivedCount, 1, "终态+标记残留行支持逐条清理");
+  assert.equal(await isTaskArchived("novel_workflow", zombieSelected.id), true);
+
+  const zombieBatch = await createWorkflowTask({
+    status: "cancelled",
+    pendingManualRecovery: true,
+    lane: "auto_director",
+  });
+  await createWorkflowTask({
+    status: "succeeded",
+    pendingManualRecovery: true,
+    lane: "auto_director",
+  });
+  const batch = await service.archive({
+    scope: "errors",
+    source: "task_center",
+    requestKey: "zombie-batch",
+  });
+  assert.equal(batch.archivedCount, 1, "errors 批量清理已取消的标记残留行");
+  assert.equal(await isTaskArchived("novel_workflow", zombieBatch.id), true);
+});
+
+test("cancelling a paused workflow task clears the residual recovery mark", async (t) => {
+  clearTables(t);
+  const { NovelWorkflowService } = require("../dist/services/novel/workflow/NovelWorkflowService.js");
+  const workflowService = new NovelWorkflowService();
+  const task = await createWorkflowTask({
+    status: "queued",
+    pendingManualRecovery: true,
+    lane: "auto_director",
+  });
+
+  await workflowService.cancelTask(task.id);
+
+  const row = await prisma.novelWorkflowTask.findUnique({ where: { id: task.id } });
+  assert.equal(row.status, "cancelled");
+  assert.equal(row.pendingManualRecovery, false, "取消终态化必须同步清掉等待恢复标记");
+});
+
+test("listArchived keeps the cursor alive when orphan marks exceed one request's scan budget", async (t) => {
+  clearTables(t);
+  await prisma.taskCenterArchive.createMany({
+    data: Array.from({ length: 421 }, (_, index) => ({
+      taskKind: "novel_workflow",
+      taskId: `orphan-mark-${index}`,
+      archivedAt: new Date("2045-06-01T00:00:00.000Z"),
+    })),
+  });
+  const first = await createWorkflowTask({ status: "failed", updatedAt: "2045-01-02T00:00:00.000Z" });
+  const second = await createWorkflowTask({ status: "cancelled", updatedAt: "2045-01-01T00:00:00.000Z" });
+  await service.archive({
+    scope: "errors",
+    source: "task_center",
+    requestKey: "orphan-paging-archive",
+  });
+
+  const firstPage = await service.listArchived({ kind: "novel_workflow" });
+  assert.equal(firstPage.items.length, 0, "孤儿标记吃满单次扫描预算时首页可能为空");
+  assert.ok(firstPage.nextCursor, "扫描未穷尽时必须返回游标，不能提前断页");
+
+  const seenIds = new Set();
+  let cursor = firstPage.nextCursor ?? null;
+  for (let page = 0; page < 5 && cursor; page += 1) {
+    const nextPage = await service.listArchived({ kind: "novel_workflow", cursor });
+    for (const item of nextPage.items) {
+      seenIds.add(item.id);
+    }
+    cursor = nextPage.nextCursor ?? null;
+  }
+  assert.deepEqual([...seenIds].sort(), [first.id, second.id].sort(), "翻页最终取到全部有效记录且不重复");
+  assert.equal(cursor, null, "有效记录取完后游标自然终止");
+});
+
+test("listArchived pagination with partial orphan marks neither skips nor repeats records", async (t) => {
+  clearTables(t);
+  await prisma.taskCenterArchive.createMany({
+    data: Array.from({ length: 25 }, (_, index) => ({
+      taskKind: "novel_workflow",
+      taskId: `orphan-mixed-${index}`,
+      archivedAt: new Date("2045-06-01T00:00:00.000Z"),
+    })),
+  });
+  const tasks = [];
+  for (const index of [1, 2, 3]) {
+    tasks.push(await createWorkflowTask({ status: "failed", updatedAt: `2045-01-0${index}T00:00:00.000Z` }));
+  }
+  await service.archive({
+    scope: "errors",
+    source: "task_center",
+    requestKey: "mixed-paging-archive",
+  });
+
+  const seenIds = new Set();
+  let cursor = null;
+  for (let page = 0; page < 5; page += 1) {
+    const result = await service.listArchived({
+      kind: "novel_workflow",
+      limit: 2,
+      ...(cursor ? { cursor } : {}),
+    });
+    for (const item of result.items) {
+      seenIds.add(item.id);
+    }
+    if (!result.nextCursor) {
+      break;
+    }
+    cursor = result.nextCursor;
+  }
+  assert.equal(seenIds.size, 3, "孤儿标记不得挤掉有效记录");
+  for (const task of tasks) {
+    assert.ok(seenIds.has(task.id), `有效记录 ${task.id} 必须出现在分页结果里`);
+  }
 });

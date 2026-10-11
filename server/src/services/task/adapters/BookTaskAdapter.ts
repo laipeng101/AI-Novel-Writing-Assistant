@@ -320,7 +320,7 @@ export class BookTaskAdapter {
     client: ArchiveDbClient = prisma,
   ): Promise<TaskArchiveScopeScan> {
     const scopeStatuses = getArchiveScopeStatuses(query.scope);
-    const archivedIds = await getArchivedTaskIds("book_analysis");
+    const archivedIds = await getArchivedTaskIds("book_analysis", client);
     const emptySucceededSectionWhere = {
       status: "succeeded" as const,
       frozen: false,
@@ -342,14 +342,6 @@ export class BookTaskAdapter {
     const candidateWhere = {
       AND: [
         scopeWhere,
-        { pendingManualRecovery: false },
-        ...(archivedIds.length ? [{ id: { notIn: archivedIds } }] : []),
-      ],
-    };
-    const blockedWhere = {
-      AND: [
-        scopeWhere,
-        { pendingManualRecovery: true },
         ...(archivedIds.length ? [{ id: { notIn: archivedIds } }] : []),
       ],
     };
@@ -361,9 +353,8 @@ export class BookTaskAdapter {
       document: { select: { title: true } },
       _count: { select: { sections: { where: emptySucceededSectionWhere } } },
     } as const;
-    const [candidateCount, blockedCount, alreadyArchivedCount, candidateRows, blockedRows] = await Promise.all([
+    const [candidateCount, alreadyArchivedCount, candidateRows] = await Promise.all([
       client.bookAnalysis.count({ where: candidateWhere }),
-      client.bookAnalysis.count({ where: blockedWhere }),
       client.bookAnalysis.count({
         where: {
           status: { in: scopeStatuses },
@@ -372,12 +363,6 @@ export class BookTaskAdapter {
       }),
       client.bookAnalysis.findMany({
         where: candidateWhere,
-        select: scanSelect,
-        orderBy: [{ updatedAt: "asc" }, { id: "asc" }],
-        take: query.take,
-      }),
-      client.bookAnalysis.findMany({
-        where: blockedWhere,
         select: scanSelect,
         orderBy: [{ updatedAt: "asc" }, { id: "asc" }],
         take: query.take,
@@ -395,8 +380,9 @@ export class BookTaskAdapter {
     return {
       candidateCount,
       candidateSample: candidateRows.map(toRow),
-      blockedCount,
-      blockedSample: blockedRows.map(toRow),
+      // 范围内状态都是终态，终态行的等待恢复标记已无意义，不再产生 blocked 记录。
+      blockedCount: 0,
+      blockedSample: [],
       alreadyArchivedCount,
     };
   }

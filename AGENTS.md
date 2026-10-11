@@ -49,7 +49,7 @@
 - The task center is presented to users as “运行记录”. It is a read-only list for task status, progress, errors, recovery location, history, and source-page navigation; it is not a workflow operation surface.
 - Do not place workflow actions in the task center, including continue, recover, retry, cancel, replan, repair, or approve actions. Those belong on the source page or workbench where the user can see the relevant creative context, affected scope, saved results, and consequence of the action.
 - “运行记录”和“导演跟进”允许对历史终态记录做可恢复的可见性管理：把不需要继续查看的已结束记录软删除到“已清理”，并从“已清理”恢复显示。软删除只写 `TaskCenterArchive` 覆盖层，不得修改业务任务状态、检查点、正文、产物、命令、通知或恢复资格；不得实现物理删除、自动过期或后台定时清理。
-- 活跃任务（排队、运行中）、等待审批任务、人工恢复任务和当前恢复候选不得软删除。清理资格由服务端统一判定，前端不得只凭状态字符串自行决定。
+- 活跃任务（排队、运行中）和等待审批任务不得软删除；人工恢复任务和当前恢复候选不进入批量清理范围，仅允许用户逐条明确选择后清理（清理后仍可从已清理恢复）。清理资格由服务端统一判定，前端不得只凭状态字符串自行决定。
 - The task center may refresh, filter, select, inspect, and open a source page. These read and navigation controls must not change task state.
 - Task projections and recovery candidates must carry a stable source route so a failed or paused record can return the user to the correct actionable page.
 - Product copy and documentation must not instruct users to perform recovery or retry inside the task center. It may tell users to inspect the record there and then return to the source page to act.

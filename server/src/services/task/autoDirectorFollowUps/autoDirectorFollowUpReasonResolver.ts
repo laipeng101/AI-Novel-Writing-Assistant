@@ -145,7 +145,9 @@ export function resolveAutoDirectorFollowUpReason(
     });
   }
 
-  if (input.pendingManualRecovery) {
+  // 等待恢复标记只对仍在队列/运行中的行有意义；终态行的历史残留标记
+  // 不再拦截，按其真实终态（失败/已取消）给出原因与动作。
+  if (input.pendingManualRecovery && (input.status === "queued" || input.status === "running")) {
     return finalizeResolvedReason({
       reason: "manual_recovery_required",
       priority: "P0",

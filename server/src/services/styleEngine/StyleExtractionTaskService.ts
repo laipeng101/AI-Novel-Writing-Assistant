@@ -712,6 +712,8 @@ export class StyleExtractionTaskService {
         currentItemLabel: null,
         cancelRequestedAt: null,
         finishedAt: new Date(),
+        // 取消是用户触发的终态化：暂停等待恢复的排队任务一并清掉标记。
+        pendingManualRecovery: false,
       },
     });
     this.logTaskEvent("task_cancelled", {
