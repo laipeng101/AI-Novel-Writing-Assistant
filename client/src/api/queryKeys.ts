@@ -118,7 +118,7 @@ export const queryKeys = {
     overview: ["tasks", "overview"] as const,
     list: (params: string) => ["tasks", "list", params] as const,
     archivePreview: (scope: string, source: string) => ["tasks", "archive-preview", scope, source] as const,
-    detail: (kind: string, id: string) => ["tasks", "detail", kind, id] as const,
+    detail: (kind: string, id: string, visibility?: string) => ["tasks", "detail", kind, id, visibility ?? "active"] as const,
     recoveryCandidates: ["tasks", "recovery-candidates"] as const,
     autoDirectorFollowUpDetail: (directorTaskId: string) => ["tasks", "auto-director-follow-up", directorTaskId] as const,
     directorTaskSnapshot: (directorTaskId: string) => ["tasks", "director-task-snapshot", directorTaskId] as const,

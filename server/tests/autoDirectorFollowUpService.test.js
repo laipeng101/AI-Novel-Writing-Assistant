@@ -687,7 +687,7 @@ test("auto director follow-up service detail only marks replaced when replacemen
   };
   prisma.autoDirectorFollowUpNotificationLog.findMany = async () => [];
   NovelWorkflowTaskAdapter.prototype.detail = async function detailMock(taskId, options) {
-    assert.deepEqual(options, { heal: false });
+    assert.deepEqual(options, { heal: false, includeArchived: false });
     return {
       id: taskId,
       kind: "novel_workflow",

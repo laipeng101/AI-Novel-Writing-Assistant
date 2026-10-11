@@ -7,6 +7,7 @@ import { prisma } from "../../db/prisma";
 import { AppError } from "../../middleware/errorHandler";
 import { bookAnalysisService } from "../bookAnalysis/BookAnalysisService";
 import { imageGenerationService } from "../image/ImageGenerationService";
+import { getArchivedTaskIdsByKind } from "./taskArchive";
 import { NovelPipelineRuntimeService } from "../novel/NovelPipelineRuntimeService";
 import type { NovelApplicationServices } from "../novel/application/NovelApplicationContracts";
 import { getSharedNovelServices } from "../novel/application/sharedNovelServices";
@@ -104,6 +105,17 @@ export class RecoveryTaskService {
   }
 
   async listRecoveryCandidates(): Promise<RecoverableTaskListResponse> {
+    // 已清理只是收起显示；重新发起后又停滞的任务若仍带清理标记，
+    // 恢复候选列表与概览计数保持一致，不把列表里看不到的任务推给用户。
+    const [archivedIdsByKind] = await Promise.all([
+      getArchivedTaskIdsByKind([
+        "novel_workflow",
+        "novel_pipeline",
+        "book_analysis",
+        "image_generation",
+        "style_extraction",
+      ]),
+    ]);
     const [
       workflowRows,
       pipelineRows,
@@ -116,6 +128,7 @@ export class RecoveryTaskService {
           lane: "auto_director",
           status: { in: ["queued", "running"] },
           pendingManualRecovery: true,
+          id: { notIn: archivedIdsByKind.get("novel_workflow") ?? [] },
         },
         select: {
           id: true,
@@ -135,6 +148,7 @@ export class RecoveryTaskService {
         where: {
           status: { in: ["queued", "running"] },
           pendingManualRecovery: true,
+          id: { notIn: archivedIdsByKind.get("novel_pipeline") ?? [] },
         },
         select: {
           id: true,
@@ -154,6 +168,7 @@ export class RecoveryTaskService {
         where: {
           status: { in: ["queued", "running"] },
           pendingManualRecovery: true,
+          id: { notIn: archivedIdsByKind.get("book_analysis") ?? [] },
         },
         select: {
           id: true,
@@ -172,6 +187,7 @@ export class RecoveryTaskService {
         where: {
           status: { in: ["queued", "running"] },
           pendingManualRecovery: true,
+          id: { notIn: archivedIdsByKind.get("image_generation") ?? [] },
         },
         select: {
           id: true,
@@ -192,6 +208,7 @@ export class RecoveryTaskService {
         where: {
           status: { in: ["queued", "running"] },
           pendingManualRecovery: true,
+          id: { notIn: archivedIdsByKind.get("style_extraction") ?? [] },
         },
         select: {
           id: true,

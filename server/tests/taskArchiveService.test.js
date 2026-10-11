@@ -223,7 +223,7 @@ test("director follow-up source only archives auto_director lane tasks", async (
   const directorTask = await createWorkflowTask({ status: "failed", lane: "auto_director" });
 
   const result = await service.archive({
-    scope: "terminal",
+    scope: "errors",
     source: "director_follow_up",
     requestKey: "director-scope",
   });
@@ -380,4 +380,86 @@ test("director follow-up source rejects selected entries outside the workflow ki
   assert.equal(reasons[analysis.id], "scope_mismatch");
   assert.equal(await isTaskArchived("book_analysis", analysis.id), false);
   assert.equal(await isTaskArchived("novel_workflow", directorTask.id), true);
+});
+
+test("director follow-up source only offers failed and cancelled cleanup scopes", async (t) => {
+  clearTables(t);
+  await createWorkflowTask({ status: "succeeded", lane: "auto_director" });
+
+  for (const scope of ["completed", "terminal"]) {
+    await assert.rejects(
+      () => service.archive({
+        scope,
+        source: "director_follow_up",
+        requestKey: `director-scope-${scope}`,
+      }),
+      /导演跟进只能清理失败或已取消的记录/,
+    );
+    await assert.rejects(
+      () => service.preview({
+        scope,
+        source: "director_follow_up",
+        requestKey: `director-preview-${scope}`,
+      }),
+      /导演跟进只能清理失败或已取消的记录/,
+    );
+  }
+  assert.equal(await prisma.taskCenterArchive.count(), 0);
+});
+
+test("recovery candidates skip tasks hidden by the cleanup overlay", async (t) => {
+  clearTables(t);
+  const { RecoveryTaskService } = require("../dist/services/task/RecoveryTaskService.js");
+  const recoveryService = new RecoveryTaskService(
+    {},
+    {},
+    { async enqueueRecoveryCommand() { return {}; } },
+    {},
+    {
+      async markPendingBookAnalysesForManualRecovery() {},
+      async markPendingImageTasksForManualRecovery() {},
+      async markPendingAutoDirectorTasksForManualRecovery() {},
+      async markPendingPipelineJobsForManualRecovery() {},
+      async markPendingStyleTasksForManualRecovery() {},
+    },
+  );
+
+  const hidden = await createWorkflowTask({ status: "failed", lane: "auto_director" });
+  await service.archive({
+    scope: "errors",
+    source: "task_center",
+    requestKey: "recovery-overlay-hidden",
+  });
+  // 模拟从来源页重新发起后再次停滞：任务回到队列并等待人工恢复。
+  await prisma.novelWorkflowTask.update({
+    where: { id: hidden.id },
+    data: { status: "queued", pendingManualRecovery: true },
+  });
+  const visible = await createWorkflowTask({
+    status: "queued",
+    pendingManualRecovery: true,
+    lane: "auto_director",
+  });
+
+  const list = await recoveryService.listRecoveryCandidates();
+  const ids = list.items.map((item) => item.id);
+  assert.equal(ids.includes(hidden.id), false, "已清理任务不得出现在恢复候选里");
+  assert.equal(ids.includes(visible.id), true, "未清理的恢复候选保持可见");
+  assert.equal(await isTaskArchived("novel_workflow", hidden.id), true);
+});
+
+test("archived workflow detail is reachable only with includeArchived", async (t) => {
+  clearTables(t);
+  const task = await createWorkflowTask({ status: "failed", lane: "auto_director" });
+  await service.archive({
+    scope: "errors",
+    source: "task_center",
+    requestKey: "detail-archived-contract",
+  });
+
+  const adapter = new NovelWorkflowTaskAdapter();
+  assert.equal(await adapter.detail(task.id), null, "默认详情不返回已清理任务");
+  const archivedDetail = await adapter.detail(task.id, { includeArchived: true });
+  assert.ok(archivedDetail, "已清理详情通过 includeArchived 可见");
+  assert.equal(archivedDetail?.id, task.id);
 });

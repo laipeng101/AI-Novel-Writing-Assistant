@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import type { TaskKind, TaskStatus, UnifiedTaskStep } from "@ai-novel/shared/types/task";
 import { useSearchParams } from "react-router-dom";
 import type { NovelWorkflowMilestone } from "@ai-novel/shared/types/novelWorkflow";
@@ -63,24 +63,44 @@ export default function TaskCenterPage() {
   const selectedId = searchParams.get("id");
   const listParamsKey = isArchivedView ? "archived" : serializeListParams({ kind, status, keyword });
 
-  const listQuery = useQuery({
+  const activeListQuery = useQuery({
     queryKey: queryKeys.tasks.list(listParamsKey),
     queryFn: () =>
       listTasks({
-        kind: isArchivedView ? undefined : kind || undefined,
-        status: isArchivedView ? undefined : status || undefined,
-        keyword: isArchivedView ? undefined : keyword.trim() || undefined,
-        limit: isArchivedView ? 100 : 80,
-        visibility: isArchivedView ? "archived" : undefined,
+        kind: kind || undefined,
+        status: status || undefined,
+        keyword: keyword.trim() || undefined,
+        limit: 80,
       }),
+    enabled: !isArchivedView,
     refetchInterval: (query) => {
-      if (isArchivedView) {
-        return false;
-      }
       const rows = query.state.data?.data?.items ?? [];
       return rows.some((item) => ACTIVE_STATUSES.has(item.status)) ? 4000 : false;
     },
   });
+
+  const archivedListQuery = useInfiniteQuery({
+    queryKey: queryKeys.tasks.list("archived"),
+    queryFn: ({ pageParam }) =>
+      listTasks({
+        limit: 100,
+        visibility: "archived",
+        ...(pageParam ? { cursor: pageParam } : {}),
+      }),
+    initialPageParam: null as string | null,
+    getNextPageParam: (lastPage) => lastPage.data?.nextCursor ?? null,
+    enabled: isArchivedView,
+  });
+
+  const listQuery = isArchivedView
+    ? {
+        isLoading: archivedListQuery.isLoading,
+        isError: archivedListQuery.isError,
+        error: archivedListQuery.error,
+        isFetching: archivedListQuery.isFetching,
+        refetch: () => archivedListQuery.refetch(),
+      }
+    : activeListQuery;
 
   const overviewQuery = useQuery({
     queryKey: queryKeys.tasks.overview,
@@ -105,7 +125,12 @@ export default function TaskCenterPage() {
     refetchInterval: (query) => (query.state.data?.data?.items.length ?? 0) > 0 ? 4000 : false,
   });
 
-  const allRows = listQuery.data?.data?.items ?? [];
+  const allRows = useMemo(
+    () => (isArchivedView
+      ? archivedListQuery.data?.pages.flatMap((page) => page.data?.items ?? []) ?? []
+      : activeListQuery.data?.data?.items ?? []),
+    [isArchivedView, archivedListQuery.data, activeListQuery.data],
+  );
   const visibleRows = useMemo(
     () => {
       if (isArchivedView) {
@@ -142,7 +167,7 @@ export default function TaskCenterPage() {
   );
 
   const detailQuery = useQuery({
-    queryKey: queryKeys.tasks.detail(selectedKind ?? "none", selectedId ?? "none"),
+    queryKey: queryKeys.tasks.detail(selectedKind ?? "none", selectedId ?? "none", visibility),
     queryFn: () => getTaskDetail(selectedKind as TaskKind, selectedId as string, { visibility }),
     enabled: Boolean(selectedKind && selectedId),
     retry: false,
@@ -389,23 +414,38 @@ export default function TaskCenterPage() {
       ) : null}
 
       <div className="grid items-start gap-5 xl:grid-cols-[minmax(0,1.25fr)_minmax(380px,0.75fr)]">
-        <TaskCenterListPanel
-          tasks={visibleRows}
-          selectedKind={selectedKind}
-          selectedId={selectedId}
-          loading={listQuery.isLoading}
-          errorMessage={listErrorMessage}
-          archived={isArchivedView}
-          onRetry={() => void listQuery.refetch()}
-          onSelectTask={(task) => {
-            setSearchParams((prev) => {
-              const next = new URLSearchParams(prev);
-              next.set("kind", task.kind);
-              next.set("id", task.id);
-              return next;
-            });
-          }}
-        />
+        <div className="flex min-w-0 flex-col gap-3">
+          <TaskCenterListPanel
+            tasks={visibleRows}
+            selectedKind={selectedKind}
+            selectedId={selectedId}
+            loading={listQuery.isLoading}
+            errorMessage={listErrorMessage}
+            archived={isArchivedView}
+            onRetry={() => void listQuery.refetch()}
+            onSelectTask={(task) => {
+              setSearchParams((prev) => {
+                const next = new URLSearchParams(prev);
+                next.set("kind", task.kind);
+                next.set("id", task.id);
+                return next;
+              });
+            }}
+          />
+          {isArchivedView && archivedListQuery.hasNextPage ? (
+            <div className="flex justify-center">
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                disabled={archivedListQuery.isFetchingNextPage}
+                onClick={() => void archivedListQuery.fetchNextPage()}
+              >
+                {archivedListQuery.isFetchingNextPage ? "正在加载…" : "加载更多已清理记录"}
+              </Button>
+            </div>
+          ) : null}
+        </div>
 
         <TaskCenterDetailPanel
           task={selectedTask}

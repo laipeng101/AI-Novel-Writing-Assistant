@@ -209,7 +209,17 @@ export class TaskArchiveService {
     };
   }
 
+  /** 导演跟进页只展示失败或已取消的导演任务；已完成记录的清理入口在运行记录。 */
+  private assertDirectorSourceScopeSupported(input: Pick<TaskArchiveRequest, "source" | "scope">): void {
+    if (input.source === "director_follow_up"
+      && input.scope !== "selected"
+      && input.scope !== "errors") {
+      throw new AppError("导演跟进只能清理失败或已取消的记录；已完成记录请在运行记录页清理。", 400);
+    }
+  }
+
   async preview(input: TaskArchiveRequest): Promise<TaskArchivePreview> {
+    this.assertDirectorSourceScopeSupported(input);
     if (input.scope === "selected") {
       const { candidateRows, skipped } = await this.collectSelectedEntries(input);
       return {
@@ -284,6 +294,7 @@ export class TaskArchiveService {
   }
 
   async archive(input: TaskArchiveRequest): Promise<TaskArchiveResult> {
+    this.assertDirectorSourceScopeSupported(input);
     if (input.scope === "selected") {
       return this.archiveSelected(input);
     }
@@ -419,9 +430,13 @@ export class TaskArchiveService {
         return { entry, restored: false, reason: "legacy_not_restorable" };
       }
     }
-    await prisma.taskCenterArchive.delete({
-      where: { id: overlay.id },
+    // 并发恢复时只有一次删除会生效，输掉竞争的一方按未归档处理而不是报错。
+    const deleted = await prisma.taskCenterArchive.deleteMany({
+      where: { taskKind: kind, taskId: id },
     });
+    if (deleted.count === 0) {
+      return { entry, restored: false, reason: "not_archived" };
+    }
     return { entry, restored: true };
   }
 

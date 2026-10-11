@@ -31,6 +31,10 @@ export default function TaskArchiveDialog({
   const queryClient = useQueryClient();
   const [scope, setScope] = useState<CleanupScope>("errors");
   const scopeLabel = source === "director_follow_up" ? "导演跟进" : "运行记录";
+  // 导演跟进页只展示失败或已取消的任务；已完成记录的清理入口在运行记录。
+  const scopeOptions = source === "director_follow_up"
+    ? TASK_CLEANUP_SCOPE_OPTIONS.filter((option) => option.value === "errors")
+    : TASK_CLEANUP_SCOPE_OPTIONS;
 
   const previewQuery = useQuery({
     queryKey: queryKeys.tasks.archivePreview(scope, source),
@@ -108,26 +112,30 @@ export default function TaskArchiveDialog({
         )}
       >
         <div className="space-y-4">
-          <div className="space-y-2" role="radiogroup" aria-label="选择清理范围">
-            {TASK_CLEANUP_SCOPE_OPTIONS.map((option) => (
-              <label
-                key={option.value}
-                className="flex cursor-pointer items-start gap-3 rounded-xl px-3 py-2 hover:bg-muted/40"
-              >
-                <input
-                  type="radio"
-                  name={`${source}-archive-scope`}
-                  className="mt-1"
-                  checked={scope === option.value}
-                  onChange={() => setScope(option.value)}
-                />
-                <span>
-                  <span className="block text-sm font-medium text-foreground">{option.label}</span>
-                  <span className="block text-xs text-muted-foreground">{option.description}</span>
-                </span>
-              </label>
-            ))}
-          </div>
+          {scopeOptions.length > 1 ? (
+            <div className="space-y-2" role="radiogroup" aria-label="选择清理范围">
+              {scopeOptions.map((option) => (
+                <label
+                  key={option.value}
+                  className="flex cursor-pointer items-start gap-3 rounded-xl px-3 py-2 hover:bg-muted/40"
+                >
+                  <input
+                    type="radio"
+                    name={`${source}-archive-scope`}
+                    className="mt-1"
+                    checked={scope === option.value}
+                    onChange={() => setScope(option.value)}
+                  />
+                  <span>
+                    <span className="block text-sm font-medium text-foreground">{option.label}</span>
+                    <span className="block text-xs text-muted-foreground">{option.description}</span>
+                  </span>
+                </label>
+              ))}
+            </div>
+          ) : (
+            <p className="text-sm text-muted-foreground">将收起失败和已取消的导演任务。</p>
+          )}
 
           {previewQuery.isLoading ? (
             <p className="text-sm text-muted-foreground">正在统计可以收起的记录…</p>

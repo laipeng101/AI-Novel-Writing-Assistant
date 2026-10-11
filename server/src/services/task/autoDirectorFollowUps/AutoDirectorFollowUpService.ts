@@ -160,6 +160,7 @@ export class AutoDirectorFollowUpService {
 
     const task = await this.workflowTaskAdapter.detail(taskId, {
       heal: options.heal,
+      includeArchived: options.visibility === "archived",
     });
     if (!task) {
       return null;
