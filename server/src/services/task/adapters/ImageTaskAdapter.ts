@@ -3,6 +3,8 @@ import { prisma } from "../../../db/prisma";
 import { AppError } from "../../../middleware/errorHandler";
 import { imageGenerationService } from "../../image/ImageGenerationService";
 import { IMAGE_TASK_STEPS, buildSteps, toLegacyTaskStatus } from "../taskCenter.shared";
+import type { ArchiveDbClient, TaskArchiveCandidateQuery, TaskArchiveScopeScan } from "../archive";
+import { getArchiveScopeStatuses } from "../archive";
 import {
   buildTaskRecoveryHint,
   isArchivableTaskStatus,
@@ -135,8 +137,8 @@ export class ImageTaskAdapter {
     }));
   }
 
-  async detail(id: string): Promise<UnifiedTaskDetail | null> {
-    if (await isTaskArchived("image_generation", id)) {
+  async detail(id: string, options: { includeArchived?: boolean } = {}): Promise<UnifiedTaskDetail | null> {
+    if (!options.includeArchived && await isTaskArchived("image_generation", id)) {
       return null;
     }
 
@@ -255,5 +257,63 @@ export class ImageTaskAdapter {
 
     await recordTaskArchive("image_generation", id);
     return null;
+  }
+
+  async scanArchiveScope(
+    query: TaskArchiveCandidateQuery,
+    client: ArchiveDbClient = prisma,
+  ): Promise<TaskArchiveScopeScan> {
+    const scopeStatuses = getArchiveScopeStatuses(query.scope);
+    const archivedIds = await getArchivedTaskIds("image_generation");
+    const scanSelect = {
+      id: true,
+      sceneType: true,
+      baseCharacterId: true,
+      novelId: true,
+      status: true,
+      updatedAt: true,
+      baseCharacter: { select: { id: true, name: true } },
+      novel: { select: { id: true, title: true } },
+    } as const;
+    const [candidateCount, blockedCount, alreadyArchivedCount, candidateRows, blockedRows] = await Promise.all([
+      client.imageGenerationTask.count({
+        where: { status: { in: scopeStatuses }, pendingManualRecovery: false, ...(archivedIds.length ? { id: { notIn: archivedIds } } : {}) },
+      }),
+      client.imageGenerationTask.count({
+        where: { status: { in: scopeStatuses }, pendingManualRecovery: true, ...(archivedIds.length ? { id: { notIn: archivedIds } } : {}) },
+      }),
+      client.imageGenerationTask.count({
+        where: { status: { in: scopeStatuses }, id: { in: archivedIds } },
+      }),
+      client.imageGenerationTask.findMany({
+        where: { status: { in: scopeStatuses }, pendingManualRecovery: false, ...(archivedIds.length ? { id: { notIn: archivedIds } } : {}) },
+        select: scanSelect,
+        orderBy: [{ updatedAt: "asc" }, { id: "asc" }],
+        take: query.take,
+      }),
+      client.imageGenerationTask.findMany({
+        where: { status: { in: scopeStatuses }, pendingManualRecovery: true, ...(archivedIds.length ? { id: { notIn: archivedIds } } : {}) },
+        select: scanSelect,
+        orderBy: [{ updatedAt: "asc" }, { id: "asc" }],
+        take: query.take,
+      }),
+    ]);
+    const toRow = (row: (typeof candidateRows)[number]) => {
+      const presentation = buildImageTaskPresentation(row);
+      return {
+        id: row.id,
+        title: presentation.title,
+        status: row.status as TaskStatus,
+        ownerLabel: presentation.ownerLabel,
+        updatedAt: row.updatedAt.toISOString(),
+      };
+    };
+    return {
+      candidateCount,
+      candidateSample: candidateRows.map(toRow),
+      blockedCount,
+      blockedSample: blockedRows.map(toRow),
+      alreadyArchivedCount,
+    };
   }
 }

@@ -31,12 +31,78 @@ export interface UnifiedTaskStep {
   updatedAt?: string | null;
 }
 
+export type TaskHistoryVisibility = "active" | "archived";
+
+export type TaskArchiveScope = "errors" | "completed" | "terminal" | "selected";
+
+export type TaskArchiveSource = "task_center" | "director_follow_up";
+
+export interface TaskArchiveEntryRef {
+  kind: TaskKind;
+  id: string;
+}
+
+export interface TaskArchiveRequest {
+  scope: TaskArchiveScope;
+  entries?: TaskArchiveEntryRef[];
+  kind?: TaskKind;
+  source: TaskArchiveSource;
+  /** 关联标识：用于日志与响应回显，不构成请求级 exactly-once 承诺。 */
+  requestKey: string;
+}
+
+export type TaskArchiveSkipReason =
+  | "active_task"
+  | "waiting_approval"
+  | "recovery_required"
+  | "scope_mismatch"
+  | "not_found"
+  | "state_changed"
+  | "already_archived";
+
+export interface TaskArchiveCandidateItem {
+  entry: TaskArchiveEntryRef;
+  title: string;
+  status: TaskStatus;
+  ownerLabel: string;
+  updatedAt: string;
+}
+
+export interface TaskArchivePreview {
+  scope: TaskArchiveScope;
+  source: TaskArchiveSource;
+  candidateCount: number;
+  candidates: TaskArchiveCandidateItem[];
+  skippedCount: number;
+  skipped: Array<{ entry: TaskArchiveEntryRef; reason: TaskArchiveSkipReason }>;
+  maxBatchSize: number;
+  truncated: boolean;
+}
+
+export interface TaskArchiveResult extends TaskArchivePreview {
+  archivedCount: number;
+  alreadyArchivedCount: number;
+  requestKey: string;
+}
+
+export interface TaskArchiveRestoreResult {
+  entry: TaskArchiveEntryRef;
+  restored: boolean;
+  reason?: "not_archived" | "legacy_not_restorable";
+}
+
+export interface TaskArchiveMetadata {
+  archivedAt: string;
+  restoreAvailable: boolean;
+}
+
 export interface UnifiedTaskSummary {
   id: string;
   kind: TaskKind;
   title: string;
   status: TaskStatus;
   pendingManualRecovery?: boolean;
+  archive?: TaskArchiveMetadata | null;
   progress: number;
   currentStage?: string | null;
   currentItemKey?: string | null;

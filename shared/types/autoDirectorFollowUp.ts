@@ -194,6 +194,7 @@ export interface AutoDirectorFollowUpListInput {
   novelId?: string;
   supportsBatch?: boolean;
   channelType?: AutoDirectorChannelType;
+  visibility?: "active" | "archived";
   page?: number;
   pageSize?: number;
 }

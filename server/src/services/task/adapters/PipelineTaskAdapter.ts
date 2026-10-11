@@ -2,6 +2,8 @@ import type { PipelineJobStatus } from "@ai-novel/shared/types/novel";
 import type { TaskStatus, UnifiedTaskDetail, UnifiedTaskSummary } from "@ai-novel/shared/types/task";
 import { prisma } from "../../../db/prisma";
 import { AppError } from "../../../middleware/errorHandler";
+import type { ArchiveDbClient, TaskArchiveCandidateQuery, TaskArchiveScopeScan } from "../archive";
+import { getArchiveScopeStatuses } from "../archive";
 import type { NovelApplicationServices } from "../../novel/application/NovelApplicationContracts";
 import {
   decoratePipelineJob,
@@ -164,8 +166,8 @@ export class PipelineTaskAdapter {
     return rows.map((row) => this.toSummary(row));
   }
 
-  async detail(id: string): Promise<UnifiedTaskDetail | null> {
-    if (await isTaskArchived("novel_pipeline", id)) {
+  async detail(id: string, options: { includeArchived?: boolean } = {}): Promise<UnifiedTaskDetail | null> {
+    if (!options.includeArchived && await isTaskArchived("novel_pipeline", id)) {
       return null;
     }
 
@@ -275,5 +277,58 @@ export class PipelineTaskAdapter {
 
     await recordTaskArchive("novel_pipeline", id);
     return null;
+  }
+
+  async scanArchiveScope(
+    query: TaskArchiveCandidateQuery,
+    client: ArchiveDbClient = prisma,
+  ): Promise<TaskArchiveScopeScan> {
+    const scopeStatuses = getArchiveScopeStatuses(query.scope);
+    const archivedIds = await getArchivedTaskIds("novel_pipeline");
+    const scanSelect = {
+      id: true,
+      status: true,
+      startOrder: true,
+      endOrder: true,
+      updatedAt: true,
+      novel: { select: { title: true } },
+    } as const;
+    const [candidateCount, blockedCount, alreadyArchivedCount, candidateRows, blockedRows] = await Promise.all([
+      client.generationJob.count({
+        where: { status: { in: scopeStatuses }, pendingManualRecovery: false, ...(archivedIds.length ? { id: { notIn: archivedIds } } : {}) },
+      }),
+      client.generationJob.count({
+        where: { status: { in: scopeStatuses }, pendingManualRecovery: true, ...(archivedIds.length ? { id: { notIn: archivedIds } } : {}) },
+      }),
+      client.generationJob.count({
+        where: { status: { in: scopeStatuses }, id: { in: archivedIds } },
+      }),
+      client.generationJob.findMany({
+        where: { status: { in: scopeStatuses }, pendingManualRecovery: false, ...(archivedIds.length ? { id: { notIn: archivedIds } } : {}) },
+        select: scanSelect,
+        orderBy: [{ updatedAt: "asc" }, { id: "asc" }],
+        take: query.take,
+      }),
+      client.generationJob.findMany({
+        where: { status: { in: scopeStatuses }, pendingManualRecovery: true, ...(archivedIds.length ? { id: { notIn: archivedIds } } : {}) },
+        select: scanSelect,
+        orderBy: [{ updatedAt: "asc" }, { id: "asc" }],
+        take: query.take,
+      }),
+    ]);
+    const toRow = (row: (typeof candidateRows)[number]) => ({
+      id: row.id,
+      title: `${row.novel.title} (${row.startOrder}-${row.endOrder}章)`,
+      status: row.status as TaskStatus,
+      ownerLabel: row.novel.title,
+      updatedAt: row.updatedAt.toISOString(),
+    });
+    return {
+      candidateCount,
+      candidateSample: candidateRows.map(toRow),
+      blockedCount,
+      blockedSample: blockedRows.map(toRow),
+      alreadyArchivedCount,
+    };
   }
 }

@@ -3,6 +3,8 @@ import type { TaskStatus, UnifiedTaskDetail, UnifiedTaskStep, UnifiedTaskSummary
 import { prisma } from "../../../db/prisma";
 import { agentRuntime } from "../../../agents";
 import { AppError } from "../../../middleware/errorHandler";
+import type { ArchiveDbClient, TaskArchiveCandidateQuery, TaskArchiveScopeScan } from "../archive";
+import { getArchiveScopeStatuses } from "../archive";
 import {
   buildTaskRecoveryHint,
   isArchivableTaskStatus,
@@ -121,8 +123,8 @@ export class AgentRunTaskAdapter {
     return rows.map((item) => this.toSummary(item, item.steps.length));
   }
 
-  async detail(id: string): Promise<UnifiedTaskDetail | null> {
-    if (await isTaskArchived("agent_run", id)) {
+  async detail(id: string, options: { includeArchived?: boolean } = {}): Promise<UnifiedTaskDetail | null> {
+    if (!options.includeArchived && await isTaskArchived("agent_run", id)) {
       return null;
     }
 
@@ -227,5 +229,54 @@ export class AgentRunTaskAdapter {
 
     await recordTaskArchive("agent_run", id);
     return null;
+  }
+
+  async scanArchiveScope(
+    query: TaskArchiveCandidateQuery,
+    client: ArchiveDbClient = prisma,
+  ): Promise<TaskArchiveScopeScan> {
+    const scopeStatuses = getArchiveScopeStatuses(query.scope);
+    const archivedIds = await getArchivedTaskIds("agent_run");
+    const baseWhere = {
+      status: { in: scopeStatuses },
+      ...(archivedIds.length ? { id: { notIn: archivedIds } } : {}),
+      ...buildAgentRunTaskCenterVisibilityWhere(),
+    };
+    // Agent 运行没有 pendingManualRecovery 字段，恢复候选恒为 0。
+    const [candidateCount, alreadyArchivedCount, candidateRows] = await Promise.all([
+      client.agentRun.count({ where: baseWhere }),
+      client.agentRun.count({
+        where: {
+          status: { in: scopeStatuses },
+          id: { in: archivedIds },
+        },
+      }),
+      client.agentRun.findMany({
+        where: baseWhere,
+        select: {
+          id: true,
+          goal: true,
+          novelId: true,
+          status: true,
+          updatedAt: true,
+        },
+        orderBy: [{ updatedAt: "asc" }, { id: "asc" }],
+        take: query.take,
+      }),
+    ]);
+    const toRow = (row: (typeof candidateRows)[number]) => ({
+      id: row.id,
+      title: row.goal.slice(0, 80) || "Agent run",
+      status: row.status as TaskStatus,
+      ownerLabel: row.novelId ? `Novel ${row.novelId}` : "Global chat",
+      updatedAt: row.updatedAt.toISOString(),
+    });
+    return {
+      candidateCount,
+      candidateSample: candidateRows.map(toRow),
+      blockedCount: 0,
+      blockedSample: [],
+      alreadyArchivedCount,
+    };
   }
 }

@@ -28,6 +28,7 @@ const listQuerySchema = z.object({
   novelId: z.string().trim().optional(),
   supportsBatch: z.coerce.boolean().optional(),
   channelType: channelTypeSchema.optional(),
+  visibility: z.enum(["active", "archived"]).optional(),
   page: z.coerce.number().int().min(1).optional(),
   pageSize: z.coerce.number().int().min(1).max(100).optional(),
 });
@@ -114,7 +115,9 @@ router.get("/", validate({ query: listQuerySchema }), async (req, res, next) => 
 router.get("/:taskId", validate({ params: taskParamsSchema }), async (req, res, next) => {
   try {
     const { taskId } = req.params as z.infer<typeof taskParamsSchema>;
-    const data = await followUpService.getDetail(taskId);
+    const data = await followUpService.getDetail(taskId, {
+      visibility: req.query.visibility === "archived" ? "archived" : "active",
+    });
     if (!data) {
       res.status(404).json({
         success: false,

@@ -3,6 +3,8 @@ import { prisma } from "../../../db/prisma";
 import { AppError } from "../../../middleware/errorHandler";
 import { ragServices } from "../../rag";
 import type { RagJobType } from "../../rag/types";
+import type { ArchiveDbClient, TaskArchiveCandidateQuery, TaskArchiveScopeScan } from "../archive";
+import { getArchiveScopeStatuses } from "../archive";
 import {
   buildTaskRecoveryHint,
   isArchivableTaskStatus,
@@ -186,8 +188,8 @@ export class KnowledgeTaskAdapter {
       });
   }
 
-  async detail(id: string): Promise<UnifiedTaskDetail | null> {
-    if (await isTaskArchived("knowledge_document", id)) {
+  async detail(id: string, options: { includeArchived?: boolean } = {}): Promise<UnifiedTaskDetail | null> {
+    if (!options.includeArchived && await isTaskArchived("knowledge_document", id)) {
       return null;
     }
 
@@ -376,5 +378,65 @@ export class KnowledgeTaskAdapter {
 
     await recordTaskArchive("knowledge_document", id);
     return null;
+  }
+
+  async scanArchiveScope(
+    query: TaskArchiveCandidateQuery,
+    client: ArchiveDbClient = prisma,
+  ): Promise<TaskArchiveScopeScan> {
+    const scopeStatuses = getArchiveScopeStatuses(query.scope);
+    const archivedIds = await getArchivedTaskIds("knowledge_document");
+    const baseWhere = {
+      ownerType: "knowledge_document" as const,
+      status: { in: scopeStatuses },
+      ...(archivedIds.length ? { id: { notIn: archivedIds } } : {}),
+    };
+    // RAG 索引任务没有 pendingManualRecovery 字段，恢复候选恒为 0。
+    const [candidateCount, alreadyArchivedCount, candidateRows] = await Promise.all([
+      client.ragIndexJob.count({ where: baseWhere }),
+      client.ragIndexJob.count({
+        where: {
+          ownerType: "knowledge_document" as const,
+          status: { in: scopeStatuses },
+          id: { in: archivedIds },
+        },
+      }),
+      client.ragIndexJob.findMany({
+        where: baseWhere,
+        select: {
+          id: true,
+          jobType: true,
+          ownerId: true,
+          status: true,
+          updatedAt: true,
+        },
+        orderBy: [{ updatedAt: "asc" }, { id: "asc" }],
+        take: query.take,
+      }),
+    ]);
+    const documents = candidateRows.length
+      ? await client.knowledgeDocument.findMany({
+        where: { id: { in: Array.from(new Set(candidateRows.map((row) => row.ownerId))) } },
+        select: { id: true, title: true },
+      })
+      : [];
+    const documentTitleById = new Map(documents.map((item) => [item.id, item.title]));
+    const toRow = (row: (typeof candidateRows)[number]) => {
+      const documentTitle = documentTitleById.get(row.ownerId) ?? "未命名知识文档";
+      return {
+        id: row.id,
+        title: getJobTitle(row.jobType as RagJobType, documentTitle),
+        status: row.status as TaskStatus,
+        ownerLabel: documentTitle,
+        updatedAt: row.updatedAt.toISOString(),
+      };
+    };
+    return {
+      candidateCount,
+      candidateSample: candidateRows.map(toRow),
+      blockedCount: 0,
+      blockedSample: [],
+      alreadyArchivedCount,
+    };
   }
 }

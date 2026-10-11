@@ -29,6 +29,7 @@ import {
   type ListTasksFilters,
 } from "./taskCenter.shared";
 import { getArchivedTaskIdsByKind } from "./taskArchive";
+import { TaskArchiveService } from "./archive";
 
 const overviewTaskKinds: TaskKind[] = [
   "book_analysis",
@@ -56,6 +57,16 @@ export class TaskCenterService {
   private readonly agentAdapter = new AgentRunTaskAdapter();
 
   private readonly styleExtractionAdapter = new StyleExtractionTaskAdapter();
+
+  readonly archives = new TaskArchiveService({
+    book_analysis: this.bookAdapter,
+    novel_pipeline: this.pipelineAdapter,
+    knowledge_document: this.knowledgeAdapter,
+    image_generation: this.imageAdapter,
+    agent_run: this.agentAdapter,
+    novel_workflow: this.workflowAdapter,
+    style_extraction: this.styleExtractionAdapter,
+  });
 
   async getOverview(): Promise<TaskOverviewSummary> {
     const archivedIdsByKind = await getArchivedTaskIdsByKind(overviewTaskKinds);
@@ -240,6 +251,13 @@ export class TaskCenterService {
   }
 
   async listTasks(filters: ListTasksFilters = {}): Promise<UnifiedTaskListResponse> {
+    if (filters.visibility === "archived") {
+      return this.archives.listArchived({
+        kind: filters.kind,
+        limit: normalizeLimit(filters.limit),
+        cursor: filters.cursor,
+      });
+    }
     const limit = normalizeLimit(filters.limit);
     const sourceTake = Math.max(60, limit * 4);
     const keyword = normalizeKeyword(filters.keyword);

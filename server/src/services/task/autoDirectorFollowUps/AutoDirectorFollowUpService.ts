@@ -78,7 +78,8 @@ export class AutoDirectorFollowUpService {
   }
 
   async list(input: AutoDirectorFollowUpListInput = {}): Promise<AutoDirectorFollowUpListResponse> {
-    const rows = await this.loadRows();
+    const visibility = input.visibility === "archived" ? "archived" : "active";
+    const rows = await this.loadRows(visibility);
     const knownTaskIds = new Set(rows.map((row) => row.id));
     const taskById = new Map(rows.map((row) => [row.id, row]));
     const channelSettings = await getAutoDirectorChannelSettings();
@@ -86,7 +87,10 @@ export class AutoDirectorFollowUpService {
     const scopedTaskItems = scopedRows
       .map((row) => projectFollowUpItem(row, knownTaskIds, channelSettings))
       .filter((item): item is AutoDirectorFollowUpItem => Boolean(item));
-    const scopedItems = scopedTaskItems.concat(await this.loadAutoApprovalItems(scopedRows, taskById));
+    // auto_approval_record 是审计记录，只出现在当前跟进视图，不进入已清理视图。
+    const scopedItems = visibility === "archived"
+      ? scopedTaskItems
+      : scopedTaskItems.concat(await this.loadAutoApprovalItems(scopedRows, taskById));
     const filteredItems = scopedItems
       .filter((item) => matchesItemFilters(item, input))
       .sort(compareFollowUpItems);
@@ -114,8 +118,8 @@ export class AutoDirectorFollowUpService {
     };
   }
 
-  async getDetail(taskId: string, options: { heal?: boolean } = {}): Promise<AutoDirectorFollowUpDetail | null> {
-    if (await isTaskArchived("novel_workflow", taskId)) {
+  async getDetail(taskId: string, options: { heal?: boolean; visibility?: "active" | "archived" } = {}): Promise<AutoDirectorFollowUpDetail | null> {
+    if (options.visibility !== "archived" && await isTaskArchived("novel_workflow", taskId)) {
       return null;
     }
 
@@ -237,22 +241,27 @@ export class AutoDirectorFollowUpService {
     }, taskById));
   }
 
-  private async loadRows(): Promise<FollowUpWorkflowRow[]> {
+  private async loadRows(visibility: "active" | "archived" = "active"): Promise<FollowUpWorkflowRow[]> {
     const archivedIds = await getArchivedTaskIds("novel_workflow");
-    return this.fetchRows(archivedIds);
+    if (visibility === "archived") {
+      return this.fetchRows(archivedIds, "only");
+    }
+    return this.fetchRows(archivedIds, "exclude");
   }
 
-  private async fetchRows(archivedIds: string[]): Promise<FollowUpWorkflowRow[]> {
+  private async fetchRows(archivedIds: string[], mode: "exclude" | "only" = "exclude"): Promise<FollowUpWorkflowRow[]> {
+    const archivedFilter = mode === "only"
+      ? { id: { in: archivedIds } }
+      : archivedIds.length > 0
+        ? { id: { notIn: archivedIds } }
+        : {};
+    if (mode === "only" && archivedIds.length === 0) {
+      return [];
+    }
     const rawRows = await prisma.novelWorkflowTask.findMany({
       where: {
         lane: "auto_director",
-        ...(archivedIds.length > 0
-          ? {
-            id: {
-              notIn: archivedIds,
-            },
-          }
-          : {}),
+        ...archivedFilter,
       },
       select: {
         id: true,

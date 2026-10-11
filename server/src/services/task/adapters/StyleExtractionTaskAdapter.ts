@@ -4,6 +4,8 @@ import { AppError } from "../../../middleware/errorHandler";
 import { getStyleEngineRuntimeSettings } from "../../settings/StyleEngineRuntimeSettingsService";
 import { styleExtractionTaskService } from "../../styleEngine/StyleExtractionTaskService";
 import { getLlmRepairSessionLogPath, getLlmSessionLogPath } from "../../../llm/sessionLogFile";
+import type { ArchiveDbClient, TaskArchiveCandidateQuery, TaskArchiveScopeScan } from "../archive";
+import { getArchiveScopeStatuses } from "../archive";
 import {
   buildSteps,
   STYLE_EXTRACTION_TASK_STEPS,
@@ -107,8 +109,8 @@ export class StyleExtractionTaskAdapter {
     });
   }
 
-  async detail(id: string): Promise<UnifiedTaskDetail | null> {
-    if (await isTaskArchived("style_extraction", id)) {
+  async detail(id: string, options: { includeArchived?: boolean } = {}): Promise<UnifiedTaskDetail | null> {
+    if (!options.includeArchived && await isTaskArchived("style_extraction", id)) {
       return null;
     }
 
@@ -247,5 +249,50 @@ export class StyleExtractionTaskAdapter {
 
     await recordTaskArchive("style_extraction", id);
     return null;
+  }
+
+  async scanArchiveScope(
+    query: TaskArchiveCandidateQuery,
+    client: ArchiveDbClient = prisma,
+  ): Promise<TaskArchiveScopeScan> {
+    const scopeStatuses = getArchiveScopeStatuses(query.scope);
+    const archivedIds = await getArchivedTaskIds("style_extraction");
+    const baseWhere = {
+      status: { in: scopeStatuses },
+      ...(archivedIds.length ? { id: { notIn: archivedIds } } : {}),
+    };
+    const [candidateCount, blockedCount, alreadyArchivedCount, candidateRows, blockedRows] = await Promise.all([
+      client.styleExtractionTask.count({ where: { ...baseWhere, pendingManualRecovery: false } }),
+      client.styleExtractionTask.count({ where: { ...baseWhere, pendingManualRecovery: true } }),
+      client.styleExtractionTask.count({
+        where: { status: { in: scopeStatuses }, id: { in: archivedIds } },
+      }),
+      client.styleExtractionTask.findMany({
+        where: { ...baseWhere, pendingManualRecovery: false },
+        select: { id: true, name: true, status: true, createdStyleProfileName: true, updatedAt: true },
+        orderBy: [{ updatedAt: "asc" }, { id: "asc" }],
+        take: query.take,
+      }),
+      client.styleExtractionTask.findMany({
+        where: { ...baseWhere, pendingManualRecovery: true },
+        select: { id: true, name: true, status: true, createdStyleProfileName: true, updatedAt: true },
+        orderBy: [{ updatedAt: "asc" }, { id: "asc" }],
+        take: query.take,
+      }),
+    ]);
+    const toRow = (row: (typeof candidateRows)[number]) => ({
+      id: row.id,
+      title: buildTaskTitle(row.name),
+      status: row.status as TaskStatus,
+      ownerLabel: row.createdStyleProfileName ?? row.name,
+      updatedAt: row.updatedAt.toISOString(),
+    });
+    return {
+      candidateCount,
+      candidateSample: candidateRows.map(toRow),
+      blockedCount,
+      blockedSample: blockedRows.map(toRow),
+      alreadyArchivedCount,
+    };
   }
 }

@@ -10,6 +10,8 @@ import type { ResourceRef } from "@ai-novel/shared/types/agent";
 import type { TaskStatus, UnifiedTaskDetail, UnifiedTaskSummary } from "@ai-novel/shared/types/task";
 import { prisma } from "../../../db/prisma";
 import { AppError } from "../../../middleware/errorHandler";
+import type { ArchiveDbClient, TaskArchiveCandidateQuery, TaskArchiveScopeScan } from "../archive";
+import { getArchiveScopeStatuses } from "../archive";
 import { DirectorCommandService } from "../../novel/director/commands/DirectorCommandService";
 import { readDirectorTaskDetailProjection } from "../../novel/director/state/DirectorStateReader";
 import { DirectorTaskStateWriter } from "../../novel/director/state/DirectorTaskStateWriter";
@@ -413,19 +415,20 @@ export class NovelWorkflowTaskAdapter {
     return visibleRows.map((row) => mapSummary(row));
   }
 
-  async detail(id: string, _options: { heal?: boolean } = {}): Promise<UnifiedTaskDetail | null> {
-    return this.readDetail(id, "full");
+  async detail(id: string, _options: { heal?: boolean; includeArchived?: boolean } = {}): Promise<UnifiedTaskDetail | null> {
+    return this.readDetail(id, "full", _options);
   }
 
   async detailCompact(id: string): Promise<UnifiedTaskDetail | null> {
-    return this.readDetail(id, "compact");
+    return this.readDetail(id, "compact", {});
   }
 
   private async readDetail(
     id: string,
     projectionMode: "full" | "compact",
+    options: { heal?: boolean; includeArchived?: boolean } = {},
   ): Promise<UnifiedTaskDetail | null> {
-    if (await isTaskArchived("novel_workflow", id)) {
+    if (!options.includeArchived && await isTaskArchived("novel_workflow", id)) {
       return null;
     }
     let row = await prisma.novelWorkflowTask.findUnique({
@@ -589,5 +592,68 @@ export class NovelWorkflowTaskAdapter {
     }
     await recordTaskArchive("novel_workflow", id);
     return null;
+  }
+
+  async scanArchiveScope(
+    query: TaskArchiveCandidateQuery,
+    client: ArchiveDbClient = prisma,
+  ): Promise<TaskArchiveScopeScan> {
+    const scopeStatuses = getArchiveScopeStatuses(query.scope);
+    const archivedIds = await getArchivedTaskIds("novel_workflow");
+    // 任务中心与导演跟进都只呈现 auto_director 赛道的导演任务，清理范围保持一致。
+    const scopeWhere = {
+      lane: "auto_director" as const,
+      status: { in: scopeStatuses },
+      ...(archivedIds.length ? { id: { notIn: archivedIds } } : {}),
+    };
+    const [candidateCount, blockedCount, alreadyArchivedCount, candidateRows, blockedRows] = await Promise.all([
+      client.novelWorkflowTask.count({
+        where: { ...scopeWhere, pendingManualRecovery: false },
+      }),
+      client.novelWorkflowTask.count({
+        where: { ...scopeWhere, pendingManualRecovery: true },
+      }),
+      client.novelWorkflowTask.count({
+        where: { lane: "auto_director" as const, status: { in: scopeStatuses }, id: { in: archivedIds } },
+      }),
+      client.novelWorkflowTask.findMany({
+        where: { ...scopeWhere, pendingManualRecovery: false },
+        select: {
+          id: true,
+          title: true,
+          status: true,
+          updatedAt: true,
+          novel: { select: { title: true } },
+        },
+        orderBy: [{ updatedAt: "asc" }, { id: "asc" }],
+        take: query.take,
+      }),
+      client.novelWorkflowTask.findMany({
+        where: { ...scopeWhere, pendingManualRecovery: true },
+        select: {
+          id: true,
+          title: true,
+          status: true,
+          updatedAt: true,
+          novel: { select: { title: true } },
+        },
+        orderBy: [{ updatedAt: "asc" }, { id: "asc" }],
+        take: query.take,
+      }),
+    ]);
+    const toRow = (row: (typeof candidateRows)[number]) => ({
+      id: row.id,
+      title: row.title,
+      status: row.status as TaskStatus,
+      ownerLabel: buildOwnerLabel(row),
+      updatedAt: row.updatedAt.toISOString(),
+    });
+    return {
+      candidateCount,
+      candidateSample: candidateRows.map(toRow),
+      blockedCount,
+      blockedSample: blockedRows.map(toRow),
+      alreadyArchivedCount,
+    };
   }
 }

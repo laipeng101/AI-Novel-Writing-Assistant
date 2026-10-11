@@ -10,6 +10,7 @@ export interface ListTasksFilters {
   keyword?: string;
   limit?: number;
   cursor?: string;
+  visibility?: "active" | "archived";
 }
 
 export interface CursorPayload {

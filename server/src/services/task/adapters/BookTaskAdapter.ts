@@ -11,6 +11,8 @@ import {
   reconcileBookAnalysisResultStatus,
   resolveLiveBookAnalysisStatus,
 } from "../../bookAnalysis/shared/bookAnalysis.status";
+import type { ArchiveDbClient, TaskArchiveCandidateQuery, TaskArchiveScopeScan } from "../archive";
+import { getArchiveScopeStatuses } from "../archive";
 import {
   buildTaskRecoveryHint,
   isArchivableTaskStatus,
@@ -156,8 +158,8 @@ export class BookTaskAdapter {
     return summaries;
   }
 
-  async detail(id: string): Promise<UnifiedTaskDetail | null> {
-    if (await isTaskArchived("book_analysis", id)) {
+  async detail(id: string, options: { includeArchived?: boolean } = {}): Promise<UnifiedTaskDetail | null> {
+    if (!options.includeArchived && await isTaskArchived("book_analysis", id)) {
       return null;
     }
 
@@ -290,22 +292,112 @@ export class BookTaskAdapter {
 
     const analysis = await prisma.bookAnalysis.findUnique({
       where: { id },
+      select: { status: true },
     });
     if (!analysis) {
       throw new AppError("Task not found.", 404);
     }
 
     const status = mapBookStatusToTaskStatus(analysis.status);
-    if (!status || !isArchivableTaskStatus(status)) {
+    if (!status) {
       if (analysis.status === "archived") {
         await recordTaskArchive("book_analysis", id);
         return null;
       }
       throw new AppError("Only completed, failed, or cancelled tasks can be archived.", 400);
     }
-
-    await bookAnalysisService.updateAnalysisStatus(id, "archived");
+    if (!isArchivableTaskStatus(status)) {
+      throw new AppError("Only completed, failed, or cancelled tasks can be archived.", 400);
+    }
+    // 运行记录清理只写 TaskCenterArchive 覆盖层；拆书业务资产状态保持原样，
+    // 业务归档仍由拆书模块自己的接口负责。
     await recordTaskArchive("book_analysis", id);
     return null;
+  }
+
+  async scanArchiveScope(
+    query: TaskArchiveCandidateQuery,
+    client: ArchiveDbClient = prisma,
+  ): Promise<TaskArchiveScopeScan> {
+    const scopeStatuses = getArchiveScopeStatuses(query.scope);
+    const archivedIds = await getArchivedTaskIds("book_analysis");
+    const emptySucceededSectionWhere = {
+      status: "succeeded" as const,
+      frozen: false,
+      AND: [
+        { OR: [{ editedContent: null }, { editedContent: "" }] },
+        { OR: [{ aiContent: null }, { aiContent: "" }] },
+      ],
+    };
+    const scopeWhere = query.scope === "errors"
+      ? {
+        OR: [
+          { status: { in: scopeStatuses } },
+          { status: "succeeded" as const, sections: { some: emptySucceededSectionWhere } },
+        ],
+      }
+      : query.scope === "completed"
+        ? { status: { in: scopeStatuses }, sections: { none: emptySucceededSectionWhere } }
+        : { status: { in: scopeStatuses } };
+    const candidateWhere = {
+      AND: [
+        scopeWhere,
+        { pendingManualRecovery: false },
+        ...(archivedIds.length ? [{ id: { notIn: archivedIds } }] : []),
+      ],
+    };
+    const blockedWhere = {
+      AND: [
+        scopeWhere,
+        { pendingManualRecovery: true },
+        ...(archivedIds.length ? [{ id: { notIn: archivedIds } }] : []),
+      ],
+    };
+    const scanSelect = {
+      id: true,
+      title: true,
+      status: true,
+      updatedAt: true,
+      document: { select: { title: true } },
+      _count: { select: { sections: { where: emptySucceededSectionWhere } } },
+    } as const;
+    const [candidateCount, blockedCount, alreadyArchivedCount, candidateRows, blockedRows] = await Promise.all([
+      client.bookAnalysis.count({ where: candidateWhere }),
+      client.bookAnalysis.count({ where: blockedWhere }),
+      client.bookAnalysis.count({
+        where: {
+          status: { in: scopeStatuses },
+          id: { in: archivedIds },
+        },
+      }),
+      client.bookAnalysis.findMany({
+        where: candidateWhere,
+        select: scanSelect,
+        orderBy: [{ updatedAt: "asc" }, { id: "asc" }],
+        take: query.take,
+      }),
+      client.bookAnalysis.findMany({
+        where: blockedWhere,
+        select: scanSelect,
+        orderBy: [{ updatedAt: "asc" }, { id: "asc" }],
+        take: query.take,
+      }),
+    ]);
+    const toRow = (row: (typeof candidateRows)[number]) => ({
+      id: row.id,
+      title: row.title,
+      status: (row.status === "succeeded" && row._count.sections > 0
+        ? "failed"
+        : row.status) as TaskStatus,
+      ownerLabel: row.document.title,
+      updatedAt: row.updatedAt.toISOString(),
+    });
+    return {
+      candidateCount,
+      candidateSample: candidateRows.map(toRow),
+      blockedCount,
+      blockedSample: blockedRows.map(toRow),
+      alreadyArchivedCount,
+    };
   }
 }

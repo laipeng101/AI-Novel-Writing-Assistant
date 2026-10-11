@@ -22,9 +22,28 @@ const listQuerySchema = z.object({
   keyword: z.string().trim().optional(),
   limit: z.coerce.number().int().min(1).max(100).optional(),
   cursor: z.string().trim().optional(),
+  visibility: z.enum(["active", "archived"]).optional(),
 });
 
 const taskParamsSchema = z.object({
+  kind: kindSchema,
+  id: z.string().trim().min(1),
+});
+
+const taskArchiveEntrySchema = z.object({
+  kind: kindSchema,
+  id: z.string().trim().min(1),
+});
+
+const taskArchiveRequestSchema = z.object({
+  scope: z.enum(["errors", "completed", "terminal", "selected"]),
+  entries: z.array(taskArchiveEntrySchema).max(100).optional(),
+  kind: kindSchema.optional(),
+  source: z.enum(["task_center", "director_follow_up"]),
+  requestKey: z.string().trim().min(1).max(128),
+});
+
+const taskArchiveRestoreSchema = z.object({
   kind: kindSchema,
   id: z.string().trim().min(1),
 });
@@ -179,11 +198,54 @@ export function createTasksRouter(options: {
         keyword: query.keyword,
         limit: query.limit,
         cursor: query.cursor,
+        visibility: query.visibility,
       });
       res.status(200).json({
         success: true,
         data,
         message: "Tasks loaded.",
+      } satisfies ApiResponse<typeof data>);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post("/archive/preview", validate({ body: taskArchiveRequestSchema }), async (req, res, next) => {
+    try {
+      const body = req.body as z.infer<typeof taskArchiveRequestSchema>;
+      const data = await taskCenterService.archives.preview(body);
+      res.status(200).json({
+        success: true,
+        data,
+        message: "Archive preview loaded.",
+      } satisfies ApiResponse<typeof data>);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post("/archive/batch", validate({ body: taskArchiveRequestSchema }), async (req, res, next) => {
+    try {
+      const body = req.body as z.infer<typeof taskArchiveRequestSchema>;
+      const data = await taskCenterService.archives.archive(body);
+      res.status(200).json({
+        success: true,
+        data,
+        message: data.archivedCount > 0 ? "Tasks archived." : "No tasks needed archiving.",
+      } satisfies ApiResponse<typeof data>);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post("/archive/restore", validate({ body: taskArchiveRestoreSchema }), async (req, res, next) => {
+    try {
+      const body = req.body as z.infer<typeof taskArchiveRestoreSchema>;
+      const data = await taskCenterService.archives.restore(body.kind, body.id);
+      res.status(200).json({
+        success: true,
+        data,
+        message: data.restored ? "Task restored." : "Task not restored.",
       } satisfies ApiResponse<typeof data>);
     } catch (error) {
       next(error);
