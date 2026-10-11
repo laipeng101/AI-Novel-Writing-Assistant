@@ -299,24 +299,15 @@ async restore(entry: TaskArchiveEntryRef): Promise<TaskArchiveRestoreResult>;
 async listArchived(input: { kind?: TaskKind; limit: number }): Promise<UnifiedTaskSummary[]>;
 ```
 
-`source === "director_follow_up"` 时忽略客户端 `kind` 并强制使用 `novel_workflow`。执行阶段重新加载任务和恢复候选，再运行资格策略。批量写入继续使用 `TaskCenterArchive.upsert()`。
+`source === "director_follow_up"` 时忽略客户端 `kind` 并强制使用 `novel_workflow`。执行阶段重新加载任务和恢复候选，再运行资格策略。批量写入在事务内逐条做存在性检查后创建 `TaskCenterArchive` 标记（不用 `upsert`），重复记录按“已清理”跳过并计数。
 
 范围请求必须直接扫描各任务适配器的历史终态数据，不能复用前端列表的 80 条上限。候选按 `updatedAt asc` 排序，单次取前 500 条；这样一次清理优先移走最旧记录，仍有更多时允许用户再次执行。
 
 - [ ] **Step 8: Preserve old single-item archive compatibility**
 
-现有 `POST /tasks/:kind/:id/archive` 转发到：
+现有 `POST /tasks/:kind/:id/archive` 保持原样：继续按任务类型适配器分发并返回既有响应合同，不经过新的批量清理服务，也不注入 `requestKey`。这样已有调用不会中断，旧响应字段也不会变化。若未来要让旧接口复用批量清理实现，必须先证明响应字段逐一对齐。
 
-```ts
-taskArchiveService.archive({
-  scope: "selected",
-  entries: [{ kind, id }],
-  source: "task_center",
-  requestKey: `legacy-single:${kind}:${id}`,
-});
-```
-
-保持旧响应合同，避免已有调用中断。
+> 实现偏差记录：原计划把旧接口转发到 `taskArchiveService.archive({ scope: "selected", ... })`，实现阶段为保住旧响应合同改为保留原处理器，未迁移到新服务。
 
 - [ ] **Step 9: Separate book-result archive from run-record cleanup**
 
