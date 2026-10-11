@@ -123,6 +123,8 @@ export interface AutoDirectorFollowUpItem {
   pendingManualRecovery: boolean;
   lastMilestoneAt: string | null;
   updatedAt: string;
+  /** 已清理视图专用：记录清理时间与是否可恢复；当前跟进视图为 null。 */
+  archive?: { archivedAt: string; restoreAvailable: boolean } | null;
 }
 
 export interface AutoDirectorFollowUpMilestone {

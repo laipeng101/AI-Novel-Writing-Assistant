@@ -227,7 +227,10 @@ export class TaskArchiveService {
     return this.buildPreview(input, accumulator);
   }
 
-  private async collectSelectedEntries(input: TaskArchiveRequest): Promise<{
+  private async collectSelectedEntries(
+    input: TaskArchiveRequest,
+    client: ArchiveDbClient = prisma,
+  ): Promise<{
     candidateRows: Array<TaskArchiveCandidateRow & { kind: TaskKind }>;
     skipped: Array<{ entry: TaskArchiveEntryRef; reason: TaskArchiveSkipReason }>;
   }> {
@@ -238,6 +241,10 @@ export class TaskArchiveService {
     const candidateRows: Array<TaskArchiveCandidateRow & { kind: TaskKind }> = [];
     const skipped: Array<{ entry: TaskArchiveEntryRef; reason: TaskArchiveSkipReason }> = [];
     for (const entry of entries) {
+      if (input.source === "director_follow_up" && entry.kind !== "novel_workflow") {
+        skipped.push({ entry, reason: "scope_mismatch" });
+        continue;
+      }
       const scanner = this.resolveScanner(entry.kind);
       if (!scanner) {
         skipped.push({ entry, reason: "not_found" });
@@ -248,7 +255,7 @@ export class TaskArchiveService {
         skipped.push({ entry, reason: "not_found" });
         continue;
       }
-      const alreadyArchived = Boolean(task.archive?.archivedAt) || Boolean(await prisma.taskCenterArchive.findUnique({
+      const alreadyArchived = Boolean(task.archive?.archivedAt) || Boolean(await client.taskCenterArchive.findUnique({
         where: { taskKind_taskId: { taskKind: entry.kind, taskId: entry.id } },
         select: { id: true },
       }));
@@ -284,43 +291,42 @@ export class TaskArchiveService {
   }
 
   private async archiveSelected(input: TaskArchiveRequest): Promise<TaskArchiveResult> {
-    const { candidateRows, skipped } = await this.collectSelectedEntries(input);
-    if (candidateRows.length > MAX_ARCHIVE_BATCH_SIZE) {
-      candidateRows.length = MAX_ARCHIVE_BATCH_SIZE;
-    }
-    let archivedCount = 0;
-    if (candidateRows.length > 0) {
-      archivedCount = await this.runInArchiveTransaction(async (client) => {
-        let created = 0;
-        for (const row of candidateRows) {
-          const existing = await client.taskCenterArchive.findUnique({
-            where: { taskKind_taskId: { taskKind: row.kind, taskId: row.id } },
-            select: { id: true },
-          });
-          if (existing) {
-            continue;
-          }
-          await client.taskCenterArchive.create({
-            data: { taskKind: row.kind, taskId: row.id },
-          });
-          created += 1;
+    const outcome = await this.runInArchiveTransaction(async (client) => {
+      // 在事务内重新收集并校验候选：预检之后任务可能已离开终态，
+      // 不再符合条件的条目会以 skipped 返回，而不是被收起。
+      const collected = await this.collectSelectedEntries(input, client);
+      const candidateRows = collected.candidateRows.slice(0, MAX_ARCHIVE_BATCH_SIZE);
+      const archivedRows: typeof candidateRows = [];
+      let alreadyArchivedCount = 0;
+      for (const row of candidateRows) {
+        const existing = await client.taskCenterArchive.findUnique({
+          where: { taskKind_taskId: { taskKind: row.kind, taskId: row.id } },
+          select: { id: true },
+        });
+        if (existing) {
+          alreadyArchivedCount += 1;
+          continue;
         }
-        return created;
-      });
-    }
-    const archivedRows = candidateRows.slice(0, archivedCount);
+        await client.taskCenterArchive.create({
+          data: { taskKind: row.kind, taskId: row.id },
+        });
+        archivedRows.push(row);
+      }
+      return { candidateRows, skipped: collected.skipped, archivedRows, alreadyArchivedCount };
+    });
+
     return {
       scope: input.scope,
       source: input.source,
       requestKey: input.requestKey,
-      candidateCount: archivedCount,
-      candidates: archivedRows.slice(0, ARCHIVE_SAMPLE_LIMIT).map(toCandidateItem),
-      skippedCount: skipped.length,
-      skipped: skipped.slice(0, ARCHIVE_SAMPLE_LIMIT),
+      candidateCount: outcome.archivedRows.length,
+      candidates: outcome.archivedRows.slice(0, ARCHIVE_SAMPLE_LIMIT).map(toCandidateItem),
+      skippedCount: outcome.skipped.length,
+      skipped: outcome.skipped.slice(0, ARCHIVE_SAMPLE_LIMIT),
       maxBatchSize: MAX_ARCHIVE_BATCH_SIZE,
       truncated: false,
-      archivedCount,
-      alreadyArchivedCount: 0,
+      archivedCount: outcome.archivedRows.length,
+      alreadyArchivedCount: outcome.alreadyArchivedCount,
     };
   }
 

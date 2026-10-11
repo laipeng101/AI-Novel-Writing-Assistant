@@ -233,7 +233,9 @@ export function AutoDirectorFollowUpListPanel(props: AutoDirectorFollowUpListPan
                         id: item.directorTaskId,
                         status: item.status,
                         pendingManualRecovery: false,
-                        archive: { archivedAt: item.updatedAt, restoreAvailable: true },
+                        archive: item.archive
+                          ? { archivedAt: item.archive.archivedAt, restoreAvailable: item.archive.restoreAvailable }
+                          : { archivedAt: item.updatedAt, restoreAvailable: true },
                       }}
                     />
                   </div>

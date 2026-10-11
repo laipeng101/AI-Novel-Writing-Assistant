@@ -334,3 +334,50 @@ test("selected scope rejects active tasks and reports reasons", async (t) => {
   assert.equal(await isTaskArchived("novel_workflow", failed.id), true);
   assert.equal(await isTaskArchived("novel_workflow", running.id), false);
 });
+
+test("selected scope revalidates task state inside the archive transaction", async (t) => {
+  clearTables(t);
+  const task = await createWorkflowTask({ status: "failed" });
+
+  const preview = await service.preview({
+    scope: "selected",
+    source: "task_center",
+    requestKey: "selected-toctou-preview",
+    entries: [{ kind: "novel_workflow", id: task.id }],
+  });
+  assert.equal(preview.candidateCount, 1);
+
+  // 用户确认清理之前任务被重新发起：执行阶段必须重新校验，不能收起运行中的任务。
+  await prisma.novelWorkflowTask.update({ where: { id: task.id }, data: { status: "running" } });
+  const result = await service.archive({
+    scope: "selected",
+    source: "task_center",
+    requestKey: "selected-toctou-execute",
+    entries: [{ kind: "novel_workflow", id: task.id }],
+  });
+  assert.equal(result.archivedCount, 0);
+  assert.equal(result.skippedCount, 1);
+  assert.equal(result.skipped[0].reason, "active_task");
+  assert.equal(await isTaskArchived("novel_workflow", task.id), false);
+});
+
+test("director follow-up source rejects selected entries outside the workflow kind", async (t) => {
+  clearTables(t);
+  const analysis = await createBookAnalysis("failed");
+  const directorTask = await createWorkflowTask({ status: "failed", lane: "auto_director" });
+
+  const result = await service.archive({
+    scope: "selected",
+    source: "director_follow_up",
+    requestKey: "director-selected-kind",
+    entries: [
+      { kind: "book_analysis", id: analysis.id },
+      { kind: "novel_workflow", id: directorTask.id },
+    ],
+  });
+  assert.equal(result.archivedCount, 1);
+  const reasons = Object.fromEntries(result.skipped.map((item) => [item.entry.id, item.reason]));
+  assert.equal(reasons[analysis.id], "scope_mismatch");
+  assert.equal(await isTaskArchived("book_analysis", analysis.id), false);
+  assert.equal(await isTaskArchived("novel_workflow", directorTask.id), true);
+});

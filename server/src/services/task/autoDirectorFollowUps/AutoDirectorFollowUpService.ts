@@ -95,6 +95,10 @@ export class AutoDirectorFollowUpService {
       .filter((item) => matchesItemFilters(item, input))
       .sort(compareFollowUpItems);
 
+    if (visibility === "archived") {
+      await this.attachArchiveMetadata(filteredItems);
+    }
+
     const page = Math.max(1, input.page ?? 1);
     const pageSize = Math.max(1, input.pageSize ?? 20);
     const start = (page - 1) * pageSize;
@@ -239,6 +243,30 @@ export class AutoDirectorFollowUpService {
       ...record,
       novel: taskById.get(record.taskId)?.novel ?? null,
     }, taskById));
+  }
+
+  /** 已清理视图需要真实的清理时间，覆盖记录来自 TaskCenterArchive。 */
+  private async attachArchiveMetadata(items: AutoDirectorFollowUpItem[]): Promise<void> {
+    const taskIds = items
+      .filter((item) => item.itemType === "task")
+      .map((item) => item.directorTaskId);
+    if (taskIds.length === 0) {
+      return;
+    }
+    const marks = await prisma.taskCenterArchive.findMany({
+      where: { taskKind: "novel_workflow", taskId: { in: taskIds } },
+      select: { taskId: true, archivedAt: true },
+    });
+    const archivedAtByTaskId = new Map(marks.map((mark) => [mark.taskId, mark.archivedAt.toISOString()]));
+    for (const item of items) {
+      if (item.itemType !== "task") {
+        continue;
+      }
+      const archivedAt = archivedAtByTaskId.get(item.directorTaskId);
+      item.archive = archivedAt
+        ? { archivedAt, restoreAvailable: true }
+        : null;
+    }
   }
 
   private async loadRows(visibility: "active" | "archived" = "active"): Promise<FollowUpWorkflowRow[]> {
