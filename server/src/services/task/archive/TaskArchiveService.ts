@@ -493,4 +493,29 @@ export class TaskArchiveService {
       },
     };
   }
+
+  async getArchivedTaskDetail(kind: TaskKind, taskId: string): Promise<UnifiedTaskDetail | null> {
+    const scanner = this.resolveScanner(kind);
+    if (!scanner) {
+      return null;
+    }
+    const mark = await prisma.taskCenterArchive.findUnique({
+      where: { taskKind_taskId: { taskKind: kind, taskId } },
+      select: { archivedAt: true },
+    });
+    if (!mark) {
+      return null;
+    }
+    const detail = await scanner.detail(taskId, { includeArchived: true });
+    if (!detail) {
+      return null;
+    }
+    return {
+      ...detail,
+      archive: {
+        archivedAt: mark.archivedAt.toISOString(),
+        restoreAvailable: true,
+      },
+    };
+  }
 }

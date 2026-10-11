@@ -28,6 +28,7 @@ import {
   getFollowUpSeverity,
   getFollowUpTone,
 } from "../followUpPresentation";
+import TaskRecordActions from "@/pages/tasks/components/TaskRecordActions";
 
 interface AutoDirectorFollowUpListPanelProps {
   items: AutoDirectorFollowUpItem[];
@@ -37,6 +38,7 @@ interface AutoDirectorFollowUpListPanelProps {
   activeSection: AutoDirectorFollowUpSection | "";
   activeStatus: string;
   activeSupportsBatch: string;
+  archived?: boolean;
   selectedTaskId: string;
   selectedTaskIds: string[];
   loading: boolean;
@@ -104,14 +106,18 @@ function formatItemType(item: AutoDirectorFollowUpItem): string {
 
 export function AutoDirectorFollowUpListPanel(props: AutoDirectorFollowUpListPanelProps) {
   const totalPages = props.pagination ? Math.max(1, Math.ceil(props.pagination.total / props.pagination.pageSize)) : 1;
+  const archived = props.archived === true;
 
   return (
     <TaskQueueSection
-      title={formatActiveSection(props.activeSection)}
-      description="按结构化原因和状态筛选；质量提醒与阻塞任务使用不同等级。"
+      title={archived ? "已清理跟进" : formatActiveSection(props.activeSection)}
+      description={archived
+        ? "这里保留被收起的导演任务，可以逐条恢复显示。"
+        : "按结构化原因和状态筛选；质量提醒与阻塞任务使用不同等级。"}
       className="min-w-0 overflow-hidden"
     >
       <div className="space-y-4">
+        {!archived ? (
         <div className={AUTO_DIRECTOR_MOBILE_CLASSES.followUpFilterGrid}>
           <Select value={props.activeReason || "__all__"} onValueChange={(value) => props.onFilterChange("reason", value === "__all__" ? "" : value)}>
             <SelectTrigger aria-label="按跟进原因筛选" className={AUTO_DIRECTOR_MOBILE_CLASSES.followUpFilterTrigger}>
@@ -149,6 +155,7 @@ export function AutoDirectorFollowUpListPanel(props: AutoDirectorFollowUpListPan
           </Select>
 
         </div>
+        ) : null}
 
         <div className="space-y-3">
           {props.loading ? (
@@ -167,12 +174,14 @@ export function AutoDirectorFollowUpListPanel(props: AutoDirectorFollowUpListPan
 
           {!props.loading && !props.errorMessage && props.items.length === 0 ? (
             <TaskQueueEmptyState
-              title="当前没有符合条件的跟进项"
-              description={props.activeSection === "auto_progress"
-                ? "当前没有正在推进的任务或最近自动通过记录。"
-                : props.activeSection === "replaced"
-                  ? "当前没有被新任务替代的旧任务。"
-                  : "可以切换分区或清除筛选条件查看其他导演任务。"}
+              title={archived ? "还没有已清理的导演任务" : "当前没有符合条件的跟进项"}
+              description={archived
+                ? "清理过的导演记录会出现在这里，恢复显示后会同时回到运行记录和导演跟进。"
+                : props.activeSection === "auto_progress"
+                  ? "当前没有正在推进的任务或最近自动通过记录。"
+                  : props.activeSection === "replaced"
+                    ? "当前没有被新任务替代的旧任务。"
+                    : "可以切换分区或清除筛选条件查看其他导演任务。"}
             />
           ) : null}
 
@@ -214,8 +223,23 @@ export function AutoDirectorFollowUpListPanel(props: AutoDirectorFollowUpListPan
                 <div className={`mt-2 text-xs text-muted-foreground ${AUTO_DIRECTOR_MOBILE_CLASSES.wrapText}`}>
                   当前阶段：{item.currentStage ?? "暂无"} · 当前模型：{item.currentModel ?? "暂无"} · 更新时间：{new Date(item.updatedAt).toLocaleString()}
                 </div>
+                {archived ? (
+                  <div className="mt-3 flex items-center justify-between gap-3">
+                    <span className="text-[11px] text-muted-foreground">恢复显示后会同时回到运行记录和导演跟进。</span>
+                    <TaskRecordActions
+                      source="director_follow_up"
+                      task={{
+                        kind: "novel_workflow",
+                        id: item.directorTaskId,
+                        status: item.status,
+                        pendingManualRecovery: false,
+                        archive: { archivedAt: item.updatedAt, restoreAvailable: true },
+                      }}
+                    />
+                  </div>
+                ) : null}
                 </TaskQueueItem>
-                {item.supportsBatch ? (
+                {!archived && item.supportsBatch ? (
                   <label className="absolute right-4 top-4 flex h-6 w-6 items-center justify-center">
                     <span className="sr-only">选择 {item.novelTitle} 进行批量操作</span>
                     <input

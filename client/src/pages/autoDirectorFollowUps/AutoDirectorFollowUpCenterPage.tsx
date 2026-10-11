@@ -35,12 +35,13 @@ import { AutoDirectorFollowUpListPanel } from "./components/AutoDirectorFollowUp
 import { AutoDirectorFollowUpOverviewCards } from "./components/AutoDirectorFollowUpOverview";
 import { reconcileSelectedTaskIds, resolveFollowUpSelectedTaskId, type FollowUpTaskOverride } from "./selectionState";
 import { resolveFollowUpOverviewPresentation } from "./followUpPresentation";
+import TaskArchiveDialog from "../tasks/components/TaskArchiveDialog";
+import TaskHistoryToolbar from "../tasks/components/TaskHistoryToolbar";
+import TaskRecordActions from "../tasks/components/TaskRecordActions";
 import { toast } from "@/components/ui/toast";
 import { Button } from "@/components/ui/button";
-import {
-  WorkspaceHeader,
-  WorkspaceNextAction,
-} from "@/components/workspace";
+import { TaskQueueSection } from "@/components/taskQueue";
+import { WorkspaceStateNotice, WorkspaceHeader, WorkspaceNextAction } from "@/components/workspace";
 import { resolveInternalNavigationTarget } from "@/lib/internalNavigation";
 import { AUTO_DIRECTOR_MOBILE_CLASSES } from "@/mobile/autoDirector";
 import { Activity, RefreshCw, ShieldAlert } from "lucide-react";
@@ -54,6 +55,8 @@ const TASK_STATUSES: readonly TaskStatus[] = [
   "cancelled",
 ];
 
+const VISIBILITY_VALUES = ["active", "archived"] as const;
+
 function buildListParamsKey(input: {
   section: AutoDirectorFollowUpSection | "";
   reason: AutoDirectorFollowUpReason | "";
@@ -62,6 +65,7 @@ function buildListParamsKey(input: {
   channelType: AutoDirectorChannelType | "";
   page: number;
   pageSize: number;
+  visibility: "active" | "archived";
 }): string {
   return JSON.stringify(input);
 }
@@ -123,6 +127,7 @@ export default function AutoDirectorFollowUpCenterPage() {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const [selectedDirectorTaskIds, setSelectedDirectorTaskIds] = useState<string[]>([]);
+  const [cleanupDialogOpen, setCleanupDialogOpen] = useState(false);
 
   const selectedNovelId = searchParams.get("novelId")?.trim() || "";
   const currentDirectorQuery = useQuery({
@@ -136,6 +141,8 @@ export default function AutoDirectorFollowUpCenterPage() {
   const status = parseEnumParam(searchParams.get("status"), TASK_STATUSES);
   const supportsBatch = searchParams.get("supportsBatch")?.trim() || "";
   const channelType = parseEnumParam(searchParams.get("channelType"), AUTO_DIRECTOR_CHANNEL_TYPES);
+  const visibility = parseEnumParam(searchParams.get("visibility"), VISIBILITY_VALUES) || "active";
+  const isArchivedView = visibility === "archived";
   const page = Math.max(1, Number(searchParams.get("page") || "1"));
   const pageSize = 20;
   const paramsKey = buildListParamsKey({
@@ -146,6 +153,7 @@ export default function AutoDirectorFollowUpCenterPage() {
     channelType,
     page,
     pageSize,
+    visibility,
   });
   const selectionContextKey = JSON.stringify([selectedNovelId, paramsKey]);
   const [selectedTaskOverride, setSelectedTaskOverride] = useState<FollowUpTaskOverride | null>(null);
@@ -153,6 +161,7 @@ export default function AutoDirectorFollowUpCenterPage() {
   const overviewQuery = useQuery({
     queryKey: queryKeys.autoDirectorFollowUps.overview,
     queryFn: getAutoDirectorFollowUpOverview,
+    enabled: !isArchivedView,
     refetchInterval: (query) => {
       const totalCount = query.state.data?.data?.totalCount ?? 0;
       return totalCount > 0 ? 4000 : false;
@@ -167,10 +176,14 @@ export default function AutoDirectorFollowUpCenterPage() {
       status: status || undefined,
       supportsBatch: supportsBatch ? supportsBatch === "true" : undefined,
       channelType: channelType || undefined,
+      visibility: isArchivedView ? "archived" : undefined,
       page,
       pageSize,
     }),
     refetchInterval: (query) => {
+      if (isArchivedView) {
+        return false;
+      }
       const items = query.state.data?.data?.items ?? [];
       return items.some((item) => item.status === "failed" || item.status === "waiting_approval") ? 4000 : false;
     },
@@ -186,8 +199,8 @@ export default function AutoDirectorFollowUpCenterPage() {
 
   const detailQuery = useQuery({
     queryKey: queryKeys.autoDirectorFollowUps.detail(selectedDirectorTaskId || "none"),
-    queryFn: () => getAutoDirectorFollowUpDetail(selectedDirectorTaskId),
-    enabled: Boolean(selectedDirectorTaskId),
+    queryFn: () => getAutoDirectorFollowUpDetail(selectedDirectorTaskId, { visibility }),
+    enabled: Boolean(selectedDirectorTaskId) && !isArchivedView,
     retry: false,
   });
 
@@ -393,6 +406,24 @@ export default function AutoDirectorFollowUpCenterPage() {
     });
   };
 
+  const handleVisibilityChange = (nextVisibility: "active" | "archived") => {
+    setSelectedTaskOverride(null);
+    setSelectedDirectorTaskIds([]);
+    setSearchParams((prev) => {
+      const next = stripLegacyTaskUrlParams(prev);
+      if (nextVisibility === "archived") {
+        next.set("visibility", "archived");
+      } else {
+        next.delete("visibility");
+      }
+      next.delete("section");
+      next.delete("novelId");
+      next.delete("supportsBatch");
+      next.set("page", "1");
+      return next;
+    });
+  };
+
   const overview = overviewQuery.data?.data ?? null;
   const {
     criticalCount,
@@ -418,13 +449,13 @@ export default function AutoDirectorFollowUpCenterPage() {
         context="自动导演"
         title="导演跟进中心"
         description="只汇总 AI 自动导演任务，不混入手动工作区任务；阻塞、质量提醒、待操作和自动推进使用不同等级。"
-        meta={(
+        meta={!isArchivedView ? (
           <>
             <span>阻塞 {criticalCount} 项</span>
             <span>待操作 {pendingActionCount} 项</span>
             <span>自动推进 {progressCount} 项</span>
           </>
-        )}
+        ) : undefined}
         actions={(
           <Button
             type="button"
@@ -438,6 +469,15 @@ export default function AutoDirectorFollowUpCenterPage() {
         )}
       />
 
+      <TaskHistoryToolbar
+        visibility={visibility}
+        onVisibilityChange={handleVisibilityChange}
+        onOpenCleanupDialog={() => setCleanupDialogOpen(true)}
+        activeRecordCount={items.length}
+      />
+
+      {!isArchivedView ? (
+        <>
       {overviewQuery.isLoading ? (
         <WorkspaceNextAction
           icon={Activity}
@@ -483,6 +523,8 @@ export default function AutoDirectorFollowUpCenterPage() {
         activeSection={section}
         onSectionChange={handleSectionChange}
       />
+        </>
+      ) : null}
 
       <div className={AUTO_DIRECTOR_MOBILE_CLASSES.followUpMasterDetailGrid}>
         <AutoDirectorFollowUpListPanel
@@ -493,6 +535,7 @@ export default function AutoDirectorFollowUpCenterPage() {
           activeSection={section}
           activeStatus={status}
           activeSupportsBatch={supportsBatch}
+          archived={isArchivedView}
           selectedTaskId={selectedDirectorTaskId}
           selectedTaskIds={selectedDirectorTaskIds}
           loading={listQuery.isLoading}
@@ -511,25 +554,46 @@ export default function AutoDirectorFollowUpCenterPage() {
           }}
         />
 
-        <AutoDirectorFollowUpDetailPanel
-          detail={detailQuery.data?.data ?? null}
-          selectedItem={items.find((item) => item.directorTaskId === selectedDirectorTaskId) ?? null}
-          loading={detailQuery.isLoading || revalidationMutation.isPending}
-          errorMessage={detailErrorMessage}
-          actionLoading={actionMutation.isPending || revalidationMutation.isPending}
-          onExecuteAction={handleExecuteAction}
-          onRefreshValidation={handleRefreshValidation}
-          onSafeFix={handleSafeFix}
-          onRetry={() => void detailQuery.refetch()}
-        />
+        {isArchivedView ? (
+          <TaskQueueSection
+            title="已清理跟进"
+            description="这里保留被收起的导演任务；恢复显示后，运行记录和导演跟进会同时重新出现。"
+            className="min-w-0 overflow-hidden"
+          >
+            <WorkspaceStateNotice
+              title="已清理的导演任务不支持在这里查看详情"
+              description="如需查看完整执行历史和来源页面，可以在运行记录的“已清理”视图中打开对应记录。"
+            />
+          </TaskQueueSection>
+        ) : (
+          <AutoDirectorFollowUpDetailPanel
+            detail={detailQuery.data?.data ?? null}
+            selectedItem={items.find((item) => item.directorTaskId === selectedDirectorTaskId) ?? null}
+            loading={detailQuery.isLoading || revalidationMutation.isPending}
+            errorMessage={detailErrorMessage}
+            actionLoading={actionMutation.isPending || revalidationMutation.isPending}
+            onExecuteAction={handleExecuteAction}
+            onRefreshValidation={handleRefreshValidation}
+            onSafeFix={handleSafeFix}
+            onRetry={() => void detailQuery.refetch()}
+          />
+        )}
       </div>
 
-      <AutoDirectorFollowUpBatchBar
-        selectedItems={selectedItems}
-        batchActionCode={batchActionCode}
-        loading={batchMutation.isPending}
-        onClear={() => setSelectedDirectorTaskIds([])}
-        onExecute={handleExecuteBatch}
+      {!isArchivedView ? (
+        <AutoDirectorFollowUpBatchBar
+          selectedItems={selectedItems}
+          batchActionCode={batchActionCode}
+          loading={batchMutation.isPending}
+          onClear={() => setSelectedDirectorTaskIds([])}
+          onExecute={handleExecuteBatch}
+        />
+      ) : null}
+
+      <TaskArchiveDialog
+        open={cleanupDialogOpen}
+        onOpenChange={setCleanupDialogOpen}
+        source="director_follow_up"
       />
     </div>
   );

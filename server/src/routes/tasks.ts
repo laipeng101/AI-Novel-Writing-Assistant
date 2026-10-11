@@ -255,7 +255,8 @@ export function createTasksRouter(options: {
   router.get("/:kind/:id", validate({ params: taskParamsSchema }), async (req, res, next) => {
     try {
       const { kind, id } = req.params as z.infer<typeof taskParamsSchema>;
-      const data = await taskCenterService.getTaskDetail(kind, id);
+      const visibility = req.query.visibility === "archived" ? "archived" : "active";
+      const data = await taskCenterService.getTaskDetail(kind, id, { visibility });
       if (!data) {
         res.status(404).json({
           success: false,

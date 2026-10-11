@@ -23,11 +23,12 @@ export async function listAutoDirectorFollowUps(params?: AutoDirectorFollowUpLis
   return data;
 }
 
-export async function getAutoDirectorFollowUpDetail(directorTaskId: string) {
+export async function getAutoDirectorFollowUpDetail(directorTaskId: string, options: { visibility?: "active" | "archived" } = {}) {
   try {
     const { data } = await apiClient.get<ApiResponse<AutoDirectorFollowUpDetail | null>>(
       `/auto-director/follow-ups/${directorTaskId}`,
       {
+        params: options.visibility === "archived" ? { visibility: "archived" } : undefined,
         silentErrorStatuses: [404],
       },
     );

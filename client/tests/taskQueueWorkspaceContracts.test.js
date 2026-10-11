@@ -52,6 +52,9 @@ test("task and follow-up pages expose recovery states and resolve book entry by 
   assert.match(followUpPage, /getCurrentDirectorTask\(selectedNovelId\)/);
   assert.match(followUpPage, /stripLegacyTaskUrlParams\(searchParams\)/);
   assert.doesNotMatch(followUpPage, /workspaceTaskId/);
+  assert.match(followUpPage, /TaskArchiveDialog/);
+  assert.match(followUpPage, /source="director_follow_up"/);
+  assert.match(followUpPage, /AutoDirectorFollowUpBatchBar/);
   assert.match(taskFilters, /aria-label="按任务类型筛选"/);
   assert.match(followUpList, /aria-label="按跟进原因筛选"/);
   assert.match(followUpOverview, /aria-pressed=/);

@@ -308,7 +308,10 @@ export class TaskCenterService {
     };
   }
 
-  async getTaskDetail(kind: TaskKind, id: string): Promise<UnifiedTaskDetail | null> {
+  async getTaskDetail(kind: TaskKind, id: string, options: { visibility?: "active" | "archived" } = {}): Promise<UnifiedTaskDetail | null> {
+    if (options.visibility === "archived") {
+      return this.archives.getArchivedTaskDetail(kind, id);
+    }
     if (kind === "book_analysis") {
       return this.bookAdapter.detail(id);
     }
