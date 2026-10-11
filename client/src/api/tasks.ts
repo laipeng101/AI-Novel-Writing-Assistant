@@ -2,6 +2,12 @@ import type { ApiResponse } from "@ai-novel/shared/types/api";
 import type { DirectorCommandAcceptedResponse } from "@ai-novel/shared/types/directorRuntime";
 import type {
   RecoverableTaskListResponse,
+  TaskArchiveRequest,
+  TaskArchiveRestoreResult,
+  TaskArchiveResult,
+  TaskArchivePreview,
+  TaskArchiveEntryRef,
+  TaskHistoryVisibility,
   TaskOverviewSummary,
   TaskKind,
   TaskStatus,
@@ -22,6 +28,7 @@ export async function listTasks(params?: {
   keyword?: string;
   limit?: number;
   cursor?: string;
+  visibility?: TaskHistoryVisibility;
 }) {
   const { data } = await apiClient.get<ApiResponse<UnifiedTaskListResponse>>("/tasks", {
     params,
@@ -49,9 +56,10 @@ export async function resumeAllRecoveryCandidates() {
   return data;
 }
 
-export async function getTaskDetail(kind: TaskKind, id: string) {
+export async function getTaskDetail(kind: TaskKind, id: string, options: { visibility?: TaskHistoryVisibility } = {}) {
   try {
     const { data } = await apiClient.get<ApiResponse<UnifiedTaskDetail | null>>(`/tasks/${kind}/${id}`, {
+      params: options.visibility === "archived" ? { visibility: "archived" } : undefined,
       silentErrorStatuses: [404],
     });
     return data;
@@ -66,6 +74,21 @@ export async function getTaskDetail(kind: TaskKind, id: string) {
     }
     throw error;
   }
+}
+
+export async function previewTaskArchive(input: TaskArchiveRequest) {
+  const { data } = await apiClient.post<ApiResponse<TaskArchivePreview>>("/tasks/archive/preview", input);
+  return data;
+}
+
+export async function batchArchiveTasks(input: TaskArchiveRequest) {
+  const { data } = await apiClient.post<ApiResponse<TaskArchiveResult>>("/tasks/archive/batch", input);
+  return data;
+}
+
+export async function restoreTaskArchive(entry: TaskArchiveEntryRef) {
+  const { data } = await apiClient.post<ApiResponse<TaskArchiveRestoreResult>>("/tasks/archive/restore", entry);
+  return data;
 }
 
 export async function retryTask(

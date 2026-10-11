@@ -114,8 +114,10 @@ export const queryKeys = {
     assets: (sceneType: "character" | "novel_cover" | "book_analysis_character", sceneId: string) => ["images", "assets", sceneType, sceneId] as const,
   },
   tasks: {
+    all: ["tasks"] as const,
     overview: ["tasks", "overview"] as const,
     list: (params: string) => ["tasks", "list", params] as const,
+    archivePreview: (scope: string, source: string) => ["tasks", "archive-preview", scope, source] as const,
     detail: (kind: string, id: string) => ["tasks", "detail", kind, id] as const,
     recoveryCandidates: ["tasks", "recovery-candidates"] as const,
     autoDirectorFollowUpDetail: (directorTaskId: string) => ["tasks", "auto-director-follow-up", directorTaskId] as const,
@@ -130,6 +132,7 @@ export const queryKeys = {
     runs: (needsAttention: boolean) => ["director-next", "runs", needsAttention] as const,
   },
   autoDirectorFollowUps: {
+    all: ["auto-director-follow-ups"] as const,
     overview: ["auto-director-follow-ups", "overview"] as const,
     list: (params: string) => ["auto-director-follow-ups", "list", params] as const,
     detail: (directorTaskId: string) => ["auto-director-follow-ups", "detail", directorTaskId] as const,

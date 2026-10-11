@@ -77,12 +77,21 @@ test("task center reads as an inbox before exposing runtime diagnostics", () => 
   assert.match(detailPanel, /执行步骤/);
 });
 
-test("task center stays read only and sends workflow actions back to the source page", () => {
+test("task center keeps workflow actions on source pages and treats cleanup as visibility management", () => {
   const taskPage = read("src/pages/tasks/TaskCenterPage.tsx");
   const detailPanel = read("src/pages/tasks/components/TaskCenterDetailPanel.tsx");
+  const archiveDialog = read("src/pages/tasks/components/TaskArchiveDialog.tsx");
+  const recordActions = read("src/pages/tasks/components/TaskRecordActions.tsx");
 
-  assert.doesNotMatch(taskPage, /useMutation|retryTask|continueNovelWorkflow|cancelTask|archiveTask/);
+  // 页面本身不承载变更操作；清理与恢复的变更逻辑只存在于独立组件中。
+  assert.doesNotMatch(taskPage, /useMutation|retryTask|continueNovelWorkflow|cancelTask|resumeRecoveryCandidate/);
+  assert.match(taskPage, /TaskHistoryToolbar/);
+  assert.match(taskPage, /TaskArchiveDialog/);
   assert.doesNotMatch(detailPanel, /可执行动作|noticeAction|failureAction|TaskCenterActionSpec/);
   assert.match(detailPanel, /打开来源页面/);
   assert.match(detailPanel, /继续、恢复或重试请在来源页面完成/);
+  // 清理入口必须传达“只是收起记录”的可见性语义，不允许出现永久删除表述。
+  assert.match(archiveDialog, /只会从列表中收起这些记录，不会删除任务结果或正文/);
+  assert.doesNotMatch(archiveDialog, /永久删除|彻底清空|错误已解决|修复完成/);
+  assert.doesNotMatch(recordActions, /retryTask|continueNovelWorkflow|cancelTask|resumeRecoveryCandidate/);
 });

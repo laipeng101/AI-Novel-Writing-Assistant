@@ -64,3 +64,16 @@ export function syncKnownTaskCaches(queryClient: QueryClient, task: UnifiedTaskD
   }
   syncTaskDetailCache(queryClient, task);
 }
+
+/**
+ * 清理或恢复历史记录后，同步刷新运行记录、导演跟进、恢复候选和小说页的
+ * 活动导演任务查询，保证两个页面与侧栏计数一致。
+ */
+export async function invalidateTaskVisibilityCaches(queryClient: QueryClient): Promise<void> {
+  await Promise.all([
+    queryClient.invalidateQueries({ queryKey: queryKeys.tasks.all }),
+    queryClient.invalidateQueries({ queryKey: queryKeys.autoDirectorFollowUps.all }),
+    queryClient.invalidateQueries({ queryKey: queryKeys.tasks.recoveryCandidates }),
+    queryClient.invalidateQueries({ queryKey: ["novels", "auto-director-task"] }),
+  ]);
+}

@@ -15,10 +15,12 @@ import { Activity, ListChecks, RefreshCw, ShieldAlert } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { WorkspaceHeader, WorkspaceNextAction } from "@/components/workspace";
 import { useLLMStore } from "@/store/llmStore";
+import TaskArchiveDialog from "./components/TaskArchiveDialog";
 import TaskCenterFilterPanel from "./components/TaskCenterFilterPanel";
 import TaskCenterDetailPanel from "./components/TaskCenterDetailPanel";
 import TaskCenterListPanel from "./components/TaskCenterListPanel";
 import TaskCenterSummaryCards from "./components/TaskCenterSummaryCards";
+import TaskHistoryToolbar from "./components/TaskHistoryToolbar";
 import {
   ACTIVE_STATUSES,
   getTaskListPriority,
@@ -53,21 +55,28 @@ export default function TaskCenterPage() {
   const [keyword, setKeyword] = useState("");
   const [onlyAnomaly, setOnlyAnomaly] = useState(false);
   const [sortMode, setSortMode] = useState<TaskSortMode>("updated_desc");
+  const [visibility, setVisibility] = useState<"active" | "archived">("active");
+  const [cleanupDialogOpen, setCleanupDialogOpen] = useState(false);
+  const isArchivedView = visibility === "archived";
 
   const selectedKind = (searchParams.get("kind") as TaskKind | null) ?? null;
   const selectedId = searchParams.get("id");
-  const listParamsKey = serializeListParams({ kind, status, keyword });
+  const listParamsKey = isArchivedView ? "archived" : serializeListParams({ kind, status, keyword });
 
   const listQuery = useQuery({
     queryKey: queryKeys.tasks.list(listParamsKey),
     queryFn: () =>
       listTasks({
-        kind: kind || undefined,
-        status: status || undefined,
-        keyword: keyword.trim() || undefined,
-        limit: 80,
+        kind: isArchivedView ? undefined : kind || undefined,
+        status: isArchivedView ? undefined : status || undefined,
+        keyword: isArchivedView ? undefined : keyword.trim() || undefined,
+        limit: isArchivedView ? 100 : 80,
+        visibility: isArchivedView ? "archived" : undefined,
       }),
     refetchInterval: (query) => {
+      if (isArchivedView) {
+        return false;
+      }
       const rows = query.state.data?.data?.items ?? [];
       return rows.some((item) => ACTIVE_STATUSES.has(item.status)) ? 4000 : false;
     },
@@ -76,6 +85,7 @@ export default function TaskCenterPage() {
   const overviewQuery = useQuery({
     queryKey: queryKeys.tasks.overview,
     queryFn: getTaskOverview,
+    enabled: !isArchivedView,
     refetchInterval: (query) => {
       const overview = query.state.data?.data;
       if (!overview) return false;
@@ -91,13 +101,17 @@ export default function TaskCenterPage() {
   const recoveryCandidatesQuery = useQuery({
     queryKey: queryKeys.tasks.recoveryCandidates,
     queryFn: listRecoveryCandidates,
+    enabled: !isArchivedView,
     refetchInterval: (query) => (query.state.data?.data?.items.length ?? 0) > 0 ? 4000 : false,
   });
 
   const allRows = listQuery.data?.data?.items ?? [];
   const visibleRows = useMemo(
-    () =>
-      (onlyAnomaly ? allRows.filter(isTaskMustHandle) : allRows)
+    () => {
+      if (isArchivedView) {
+        return allRows;
+      }
+      return (onlyAnomaly ? allRows.filter(isTaskMustHandle) : allRows)
         .map((item, index) => ({ item, index }))
         .sort((left, right) => {
           if (sortMode !== "default") {
@@ -122,16 +136,20 @@ export default function TaskCenterPage() {
           }
           return left.index - right.index;
         })
-        .map(({ item }) => item),
-    [allRows, onlyAnomaly, sortMode],
+        .map(({ item }) => item);
+    },
+    [allRows, isArchivedView, onlyAnomaly, sortMode],
   );
 
   const detailQuery = useQuery({
     queryKey: queryKeys.tasks.detail(selectedKind ?? "none", selectedId ?? "none"),
-    queryFn: () => getTaskDetail(selectedKind as TaskKind, selectedId as string),
+    queryFn: () => getTaskDetail(selectedKind as TaskKind, selectedId as string, { visibility }),
     enabled: Boolean(selectedKind && selectedId),
     retry: false,
     refetchInterval: (query) => {
+      if (isArchivedView) {
+        return false;
+      }
       const task = query.state.data?.data;
       return task && ACTIVE_STATUSES.has(task.status) ? 4000 : false;
     },
@@ -274,7 +292,16 @@ export default function TaskCenterPage() {
         )}
       />
 
-      <WorkspaceNextAction
+      <TaskHistoryToolbar
+        visibility={visibility}
+        onVisibilityChange={setVisibility}
+        onOpenCleanupDialog={() => setCleanupDialogOpen(true)}
+        activeRecordCount={allRows.length}
+      />
+
+      {!isArchivedView ? (
+        <>
+          <WorkspaceNextAction
         className="rounded-2xl border-transparent px-5 py-3 shadow-none"
         icon={overviewErrorMessage ? RefreshCw : hasMustHandleTask ? ShieldAlert : Activity}
         tone={overviewQuery.isLoading ? "info" : overviewErrorMessage ? "danger" : hasMustHandleTask ? "danger" : waitingActionCount > 0 ? "info" : qualityReminderCount > 0 ? "warning" : runningCount + queuedCount > 0 ? "info" : allRows.length > 0 ? "success" : "neutral"}
@@ -358,6 +385,8 @@ export default function TaskCenterPage() {
         onOnlyAnomalyChange={setOnlyAnomaly}
         onSortModeChange={setSortMode}
       />
+        </>
+      ) : null}
 
       <div className="grid items-start gap-5 xl:grid-cols-[minmax(0,1.25fr)_minmax(380px,0.75fr)]">
         <TaskCenterListPanel
@@ -366,6 +395,7 @@ export default function TaskCenterPage() {
           selectedId={selectedId}
           loading={listQuery.isLoading}
           errorMessage={listErrorMessage}
+          archived={isArchivedView}
           onRetry={() => void listQuery.refetch()}
           onSelectTask={(task) => {
             setSearchParams((prev) => {
@@ -395,6 +425,11 @@ export default function TaskCenterPage() {
             : []}
         />
       </div>
+
+      <TaskArchiveDialog
+        open={cleanupDialogOpen}
+        onOpenChange={setCleanupDialogOpen}
+      />
     </div>
   );
 }

@@ -16,6 +16,8 @@ import {
   getTaskQueueSeverity,
   getTaskQueueTone,
 } from "../taskCenterUtils";
+import { formatArchivedAt } from "../taskArchivePresentation";
+import TaskRecordActions from "./TaskRecordActions";
 
 interface TaskCenterListPanelProps {
   tasks: UnifiedTaskSummary[];
@@ -23,6 +25,7 @@ interface TaskCenterListPanelProps {
   selectedId: string | null;
   loading: boolean;
   errorMessage?: string | null;
+  archived?: boolean;
   onRetry: () => void;
   onSelectTask: (task: UnifiedTaskSummary) => void;
 }
@@ -33,13 +36,16 @@ export default function TaskCenterListPanel({
   selectedId,
   loading,
   errorMessage,
+  archived = false,
   onRetry,
   onSelectTask,
 }: TaskCenterListPanelProps) {
   return (
     <TaskQueueSection
-      title="任务记录"
-      description={`${tasks.length} 项结果，优先展示需要处理和等待操作的任务。`}
+      title={archived ? "已清理记录" : "任务记录"}
+      description={archived
+        ? `${tasks.length} 条被收起的历史记录，任务结果和正文都还在，可以恢复显示。`
+        : `${tasks.length} 项结果，优先展示需要处理和等待操作的任务。`}
       className="overflow-hidden rounded-2xl border-border/40 bg-card/60 shadow-[0_12px_36px_rgba(15,23,42,0.035)]"
     >
       <div className="space-y-3">
@@ -96,16 +102,23 @@ export default function TaskCenterListPanel({
                   {task.blockingReason}
                 </div>
               ) : null}
-              <div className="mt-3 text-[11px] text-muted-foreground">
-                更新于 {formatDate(task.updatedAt)}
+              <div className="flex items-center justify-between gap-3">
+                <div className="min-w-0 text-[11px] text-muted-foreground">
+                  {archived && task.archive?.archivedAt
+                    ? formatArchivedAt(task.archive.archivedAt)
+                    : `更新于 ${formatDate(task.updatedAt)}`}
+                </div>
+                <TaskRecordActions task={task} />
               </div>
             </TaskQueueItem>
           );
         })}
         {!loading && !errorMessage && tasks.length === 0 ? (
           <TaskQueueEmptyState
-            title="没有符合条件的任务"
-            description="可以清除筛选条件，或回到来源页面发起新的创作与资料处理任务。"
+            title={archived ? "还没有已清理的记录" : "没有符合条件的任务"}
+            description={archived
+              ? "清理过的历史记录会出现在这里，随时可以恢复显示。"
+              : "可以清除筛选条件，或回到来源页面发起新的创作与资料处理任务。"}
           />
         ) : null}
       </div>

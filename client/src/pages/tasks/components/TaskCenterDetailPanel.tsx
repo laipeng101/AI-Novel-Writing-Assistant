@@ -15,6 +15,8 @@ import { Button } from "@/components/ui/button";
 import { WorkspaceStateNotice } from "@/components/workspace";
 import TaskCenterDetailSummary from "./TaskCenterDetailSummary";
 import TaskCenterMilestoneHistory from "./TaskCenterMilestoneHistory";
+import TaskRecordActions from "./TaskRecordActions";
+import { getCleanupState } from "../taskArchivePresentation";
 
 interface TaskCenterDetailPanelProps {
   task?: UnifiedTaskDetail | null;
@@ -106,6 +108,14 @@ export default function TaskCenterDetailPanel(props: TaskCenterDetailPanelProps)
               consequence="只打开任务来源，不会改变任务状态。继续、恢复或重试请在来源页面完成。"
               action={<Button asChild size="sm" variant="outline"><Link to={getTaskHistorySourceHref(task)}>打开来源页面</Link></Button>}
             />
+
+            {getCleanupState(task).mode !== "hidden" ? (
+              <TaskQueueActionRow
+                title={task.archive?.archivedAt ? "恢复这条记录的显示" : "整理这条记录"}
+                consequence="只会收起或恢复这条记录的显示，不会删除任务结果、正文或恢复位置。"
+                action={<TaskRecordActions task={task} />}
+              />
+            ) : null}
 
             <details className="group border-t border-border/35 pt-3">
               <summary className="flex cursor-pointer list-none items-center justify-between text-sm font-medium marker:hidden">
